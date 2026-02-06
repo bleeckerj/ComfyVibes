@@ -1,0 +1,31 @@
+[project]
+name = "comfy-mcp"
+version = "0.1.0"
+description = "ComfyMCP server MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Near Future Laboratory" }]
+
+dependencies = [
+  "httpx>=0.27.0",
+  "mcp>=0.1.0",
+  "comfyui-workflow-tools @ git+https://github.com/bleeckerj/comfyui-workflow-extractor.git",
+  "pydantic>=2.7.0",
+  "pydantic-settings>=2.2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+comfy-mcp = "comfy_mcp.mcp_server.cli:main"
+comfy-vibes = "comfy_mcp.mcp_server.cli:main"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+pythonpath = ["src"]
