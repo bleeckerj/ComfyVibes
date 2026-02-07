@@ -7,6 +7,8 @@ import asyncio
 import time
 from typing import Any, Dict, Optional
 
+from pathlib import Path
+
 from comfy_mcp.comfy_client.client import ComfyClient
 from comfy_mcp.extraction.adapter import WorkflowExtractor
 from comfy_mcp.mcp_server.policy import Policy
@@ -157,3 +159,94 @@ class WorkflowTools:
                 return {"status": "complete", "history": history}
             await asyncio.sleep(poll_ms / 1000.0)
         return {"status": "timeout", "history": {}}
+
+    async def run_aspect_ratio_adjustment(
+        self,
+        image_path: str,
+        aspect_ratio: str,
+        workflow_id: str = "aspect_ratio_adjustment",
+        positive_prompt: Optional[str] = None,
+        negative_prompt: Optional[str] = None,
+        client_id: Optional[str] = None,
+        token: Optional[str] = None,
+        upload_subfolder: Optional[str] = None,
+        overwrite: bool = False,
+    ) -> Dict[str, Any]:
+        """Run the aspect ratio adjustment workflow with an uploaded image."""
+        self._policy.enforce_mutation(token)
+
+        workflow = self._store.read_workflow(workflow_id)
+        if not workflow:
+            if workflow_id != "aspect_comfyui_01077":
+                workflow = self._store.read_workflow("aspect_comfyui_01077")
+                workflow_id = "aspect_comfyui_01077"
+            if not workflow:
+                raise ValueError("Workflow not found: aspect_ratio_adjustment or aspect_comfyui_01077")
+
+        image_file = Path(image_path)
+        if not image_file.exists():
+            raise ValueError(f"Image file not found: {image_path}")
+
+        upload_result = await self._client.upload_image(
+            str(image_file),
+            image_type="input",
+            subfolder=upload_subfolder,
+            overwrite=overwrite,
+        )
+        uploaded_name = upload_result.get("name")
+        uploaded_subfolder = upload_result.get("subfolder", "")
+        if not uploaded_name:
+            raise ValueError("Image upload did not return a filename")
+
+        object_info = await self._client.get_object_info()
+        flux_node = object_info.get("FluxResolutionNode") or {}
+        flux_inputs = flux_node.get("input", {})
+        aspect_entry = flux_inputs.get("required", {}).get("aspect_ratio") or flux_inputs.get("optional", {}).get("aspect_ratio")
+        allowed_aspects = []
+        if isinstance(aspect_entry, list) and aspect_entry:
+            allowed_aspects = aspect_entry[0]
+        if allowed_aspects and aspect_ratio not in allowed_aspects:
+            raise ValueError(
+                f"aspect_ratio '{aspect_ratio}' not in allowed list: {allowed_aspects}"
+            )
+
+        patched = json.loads(json.dumps(workflow))
+
+        def _slug_aspect(value: str) -> str:
+            return (
+                value.replace(" (", "_")
+                .replace(")", "")
+                .replace(":", "x")
+                .replace(" ", "_")
+                .lower()
+            )
+
+        if "109" in patched and isinstance(patched["109"], dict):
+            patched["109"].setdefault("inputs", {})["image"] = uploaded_name
+            if uploaded_subfolder:
+                patched["109"]["inputs"]["subfolder"] = uploaded_subfolder
+
+        if "79" in patched and isinstance(patched["79"], dict):
+            inputs = patched["79"].setdefault("inputs", {})
+            base_prefix = inputs.get("filename_prefix", "ComfyUI")
+            inputs["filename_prefix"] = f"{base_prefix}_{_slug_aspect(aspect_ratio)}"
+
+        if "115" in patched and isinstance(patched["115"], dict):
+            inputs = patched["115"].setdefault("inputs", {})
+            inputs["aspect_ratio"] = aspect_ratio
+            inputs["custom_ratio"] = False
+            ratio_value = aspect_ratio.split(" ")[0]
+            inputs["custom_aspect_ratio"] = ratio_value
+
+        if positive_prompt is not None and "113" in patched:
+            patched["113"].setdefault("inputs", {})["prompt"] = positive_prompt
+        if negative_prompt is not None and "114" in patched:
+            patched["114"].setdefault("inputs", {})["prompt"] = negative_prompt
+
+        result = await self._client.queue_prompt(patched, client_id=client_id)
+        return {
+            "workflow_id": workflow_id,
+            "prompt_id": result.get("prompt_id"),
+            "upload": upload_result,
+            "aspect_ratio": aspect_ratio,
+        }

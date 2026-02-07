@@ -39,12 +39,12 @@ ComfyVibes turns ComfyUI workflows into reusable, automation‑ready building bl
 
 #### ComfyUI Read Tools
 
-- `comfy.nodes.list`
-- `comfy.queue.get`
-- `comfy.history.get`
-- `comfy.models.list`
-- `comfy.models.get`
-- `comfy.embeddings.list`
+- `comfy_nodes_list`
+- `comfy_queue_get`
+- `comfy_history_get`
+- `comfy_models_list`
+- `comfy_models_get`
+- `comfy_embeddings_list`
 
 #### Workflow Tools
 
@@ -143,15 +143,15 @@ print(result)
 
 ### Workflow Tools
 
-- `workflows.list`
-- `workflows.get`
-- `workflows.params.get`
-- `workflows.save`
-- `workflows.delete`
-- `workflows.run`
-- `workflows.wait`
-- `workflows.extract_from_artifact`
-- `workflows.import_from_artifact`
+- `workflows_list`
+- `workflows_get`
+- `workflows_params_get`
+- `workflows_save`
+- `workflows_delete`
+- `workflows_run`
+- `workflows_wait`
+- `workflows_extract_from_artifact`
+- `workflows_import_from_artifact`
 
 ---
 

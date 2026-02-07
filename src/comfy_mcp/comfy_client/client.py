@@ -67,6 +67,30 @@ class ComfyClient:
             payload["client_id"] = client_id
         return await self._post_json("/prompt", payload)
 
+    async def upload_image(
+        self,
+        file_path: str,
+        image_type: str = "input",
+        subfolder: Optional[str] = None,
+        overwrite: bool = False,
+    ) -> dict:
+        """Upload an image to ComfyUI via `/upload/image`."""
+        data = {"type": image_type, "overwrite": str(overwrite).lower()}
+        if subfolder:
+            data["subfolder"] = subfolder
+
+        try:
+            with open(file_path, "rb") as handle:
+                files = {"image": (file_path.split("/")[-1], handle, "application/octet-stream")}
+                response = await self._client.post("/upload/image", data=data, files=files)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ComfyClientError(f"ComfyUI request failed: {exc}") from exc
+        except OSError as exc:
+            raise ComfyClientError(f"Image upload failed: {exc}") from exc
+
+        return response.json()
+
     async def close(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.aclose()

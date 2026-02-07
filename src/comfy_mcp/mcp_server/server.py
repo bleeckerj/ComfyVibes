@@ -48,17 +48,17 @@ def create_server(config: AppConfig):
 
     tool_defs = [
         types.Tool(
-            name="comfy.nodes.list",
+            name="comfy_nodes_list",
             description="Return ComfyUI node catalog.",
             inputSchema=_tool_schema(),
         ),
         types.Tool(
-            name="comfy.queue.get",
+            name="comfy_queue_get",
             description="Return ComfyUI queue state.",
             inputSchema=_tool_schema(),
         ),
         types.Tool(
-            name="comfy.history.get",
+            name="comfy_history_get",
             description="Return ComfyUI history data.",
             inputSchema=_tool_schema(
                 {"prompt_id": {"type": "string"}},
@@ -66,37 +66,37 @@ def create_server(config: AppConfig):
             ),
         ),
         types.Tool(
-            name="comfy.models.list",
+            name="comfy_models_list",
             description="Return available model folders.",
             inputSchema=_tool_schema(),
         ),
         types.Tool(
-            name="comfy.models.get",
+            name="comfy_models_get",
             description="Return available model files for a folder.",
             inputSchema=_tool_schema({"folder": {"type": "string"}}, ["folder"]),
         ),
         types.Tool(
-            name="comfy.embeddings.list",
+            name="comfy_embeddings_list",
             description="Return available embedding names.",
             inputSchema=_tool_schema(),
         ),
         types.Tool(
-            name="workflows.list",
+            name="workflows_list",
             description="List workflows in the store.",
             inputSchema=_tool_schema(),
         ),
         types.Tool(
-            name="workflows.get",
+            name="workflows_get",
             description="Return workflow JSON and metadata.",
             inputSchema=_tool_schema({"workflow_id": {"type": "string"}}, ["workflow_id"]),
         ),
         types.Tool(
-            name="workflows.params.get",
+            name="workflows_params_get",
             description="Return params.json for a workflow id.",
             inputSchema=_tool_schema({"workflow_id": {"type": "string"}}, ["workflow_id"]),
         ),
         types.Tool(
-            name="workflows.save",
+            name="workflows_save",
             description="Save a workflow entry to the store.",
             inputSchema=_tool_schema(
                 {
@@ -110,7 +110,7 @@ def create_server(config: AppConfig):
             ),
         ),
         types.Tool(
-            name="workflows.delete",
+            name="workflows_delete",
             description="Delete a workflow entry from the store.",
             inputSchema=_tool_schema(
                 {"workflow_id": {"type": "string"}, "token": {"type": "string"}},
@@ -118,7 +118,7 @@ def create_server(config: AppConfig):
             ),
         ),
         types.Tool(
-            name="workflows.run",
+            name="workflows_run",
             description="Run a workflow with parameter overrides via ComfyUI.",
             inputSchema=_tool_schema(
                 {
@@ -132,7 +132,7 @@ def create_server(config: AppConfig):
             ),
         ),
         types.Tool(
-            name="workflows.wait",
+            name="workflows_wait",
             description="Wait for a prompt to appear in history.",
             inputSchema=_tool_schema(
                 {
@@ -144,7 +144,7 @@ def create_server(config: AppConfig):
             ),
         ),
         types.Tool(
-            name="workflows.extract_from_artifact",
+            name="workflows_extract_from_artifact",
             description="Extract workflow from an image or video artifact.",
             inputSchema=_tool_schema(
                 {"path": {"type": "string"}, "preserve_format": {"type": "boolean"}},
@@ -152,7 +152,7 @@ def create_server(config: AppConfig):
             ),
         ),
         types.Tool(
-            name="workflows.import_from_artifact",
+            name="workflows_import_from_artifact",
             description="Extract workflow from artifact and save to the store.",
             inputSchema=_tool_schema(
                 {
@@ -165,24 +165,43 @@ def create_server(config: AppConfig):
                 ["path", "workflow_id"],
             ),
         ),
+        types.Tool(
+            name="workflows_run_aspect_ratio_adjustment",
+            description="Upload an image, set aspect ratio, and run the aspect ratio adjustment workflow.",
+            inputSchema=_tool_schema(
+                {
+                    "image_path": {"type": "string"},
+                    "aspect_ratio": {"type": "string"},
+                    "workflow_id": {"type": "string"},
+                    "positive_prompt": {"type": "string"},
+                    "negative_prompt": {"type": "string"},
+                    "client_id": {"type": "string"},
+                    "token": {"type": "string"},
+                    "upload_subfolder": {"type": "string"},
+                    "overwrite": {"type": "boolean"},
+                },
+                ["image_path", "aspect_ratio"],
+            ),
+        ),
     ]
 
     handlers: Dict[str, Callable[..., Any] | Callable[..., Awaitable[Any]]] = {
-        "comfy.nodes.list": comfy_tools.nodes_list,
-        "comfy.queue.get": comfy_tools.queue_get,
-        "comfy.history.get": comfy_tools.history_get,
-        "comfy.models.list": comfy_tools.models_list,
-        "comfy.models.get": comfy_tools.models_get,
-        "comfy.embeddings.list": comfy_tools.embeddings_list,
-        "workflows.list": workflow_tools.list,
-        "workflows.get": workflow_tools.get,
-        "workflows.params.get": workflow_tools.params_get,
-        "workflows.save": workflow_tools.save,
-        "workflows.delete": workflow_tools.delete,
-        "workflows.run": workflow_tools.run,
-        "workflows.wait": workflow_tools.wait,
-        "workflows.extract_from_artifact": workflow_tools.extract_from_artifact,
-        "workflows.import_from_artifact": workflow_tools.import_from_artifact,
+        "comfy_nodes_list": comfy_tools.nodes_list,
+        "comfy_queue_get": comfy_tools.queue_get,
+        "comfy_history_get": comfy_tools.history_get,
+        "comfy_models_list": comfy_tools.models_list,
+        "comfy_models_get": comfy_tools.models_get,
+        "comfy_embeddings_list": comfy_tools.embeddings_list,
+        "workflows_list": workflow_tools.list,
+        "workflows_get": workflow_tools.get,
+        "workflows_params_get": workflow_tools.params_get,
+        "workflows_save": workflow_tools.save,
+        "workflows_delete": workflow_tools.delete,
+        "workflows_run": workflow_tools.run,
+        "workflows_wait": workflow_tools.wait,
+        "workflows_extract_from_artifact": workflow_tools.extract_from_artifact,
+        "workflows_import_from_artifact": workflow_tools.import_from_artifact,
+        "workflows_run_aspect_ratio_adjustment": workflow_tools.run_aspect_ratio_adjustment,
     }
 
     @server.list_tools()
