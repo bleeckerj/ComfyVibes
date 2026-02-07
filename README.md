@@ -1,5 +1,7 @@
 # ComfyVibes
 
+![ComfyVibes hero](https://imagedelivery.net/gaLGizR3kCgx5yRLtiRIOw/c1d0dbb0-fe56-41c5-938a-e45bc10c1400/w=900?format=webp)
+
 **The creative engine of ComfyUI workflows without the complexity. Conversational UI. Automation. AI. Pure joy.**
 
 ComfyVibes is for creative technologists, visual storytellers, and anyone who wants to push ComfyUI beyond the ordinary. This toolkit lets you explore the remarkable capabilities of ComfyUI without being boxed in by cryptic node graphs or technical hurdles. Have conversations with your workflows, experiment with generative visual storytelling, and discover new creative directions—no manual wrangling required. ComfyVibes is your bridge to a more intuitive, playful, and generative engagement with ComfyUI, where imagination leads and the platform follows.
