@@ -46,6 +46,17 @@ def create_server(config: AppConfig):
     server = Server("comfy-mcp")
     comfy_tools, workflow_tools = build_tools(config)
 
+    def _tool_to_payload(tool: Any) -> Dict[str, Any]:
+        if hasattr(tool, "model_dump"):
+            return tool.model_dump()
+        if hasattr(tool, "dict"):
+            return tool.dict()
+        return {
+            "name": getattr(tool, "name", None),
+            "description": getattr(tool, "description", None),
+            "inputSchema": getattr(tool, "inputSchema", None),
+        }
+
     tool_defs = [
         types.Tool(
             name="comfy_nodes_list",
@@ -78,6 +89,11 @@ def create_server(config: AppConfig):
         types.Tool(
             name="comfy_embeddings_list",
             description="Return available embedding names.",
+            inputSchema=_tool_schema(),
+        ),
+        types.Tool(
+            name="list_tools",
+            description="Return tool definitions for this MCP server.",
             inputSchema=_tool_schema(),
         ),
         types.Tool(
@@ -175,6 +191,8 @@ def create_server(config: AppConfig):
                     "workflow_id": {"type": "string"},
                     "positive_prompt": {"type": "string"},
                     "negative_prompt": {"type": "string"},
+                    "seed": {"type": "integer"},
+                    "output_base_name": {"type": "string"},
                     "client_id": {"type": "string"},
                     "token": {"type": "string"},
                     "upload_subfolder": {"type": "string"},
@@ -192,6 +210,7 @@ def create_server(config: AppConfig):
         "comfy_models_list": comfy_tools.models_list,
         "comfy_models_get": comfy_tools.models_get,
         "comfy_embeddings_list": comfy_tools.embeddings_list,
+        "list_tools": lambda: {"tools": [_tool_to_payload(tool) for tool in tool_defs]},
         "workflows_list": workflow_tools.list,
         "workflows_get": workflow_tools.get,
         "workflows_params_get": workflow_tools.params_get,

@@ -1,0 +1,44 @@
+{
+  "llm": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "PASTE_OPENAI_API_KEY_HERE",
+    "api_key_env": "OPENAI_API_KEY",
+    "model": "gpt-4o-mini",
+    "temperature": 0.2,
+    "timeout_s": 180
+  },
+  "system_prompt": "You are a terminal chat orchestrator. Decide when to call MCP tools, then summarize results for the user.",
+  "strict_tool_facts": true,
+  "servers": [
+    {
+      "name": "comfy",
+      "command": "/ABSOLUTE/PATH/TO/nfl-comfymcp/.venv/bin/python",
+      "args": [
+        "-m",
+        "comfy_mcp.mcp_server.cli"
+      ],
+      "tool_prefixes": [
+        "comfy_",
+        "workflows_"
+      ],
+      "env": {
+        "COMFY_MCP_COMFY_BASE_URL": "http://127.0.0.1:8188"
+      }
+    },
+    {
+      "name": "photarium",
+      "command": "node",
+      "args": [
+        "dist/index.js"
+      ],
+      "tool_prefixes": [
+        "photarium_",
+        "catalog_"
+      ],
+      "cwd": "/ABSOLUTE/PATH/TO/cloud-flare-image-handler/mcp-server",
+      "env": {
+        "PHOTARIUM_BASE_URL": "http://127.0.0.1:3000"
+      }
+    }
+  ]
+}
