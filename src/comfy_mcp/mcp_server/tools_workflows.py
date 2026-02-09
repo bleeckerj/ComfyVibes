@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import re
 import time
 from typing import Any, Dict, Optional
 
@@ -167,6 +168,8 @@ class WorkflowTools:
         workflow_id: str = "aspect_ratio_adjustment",
         positive_prompt: Optional[str] = None,
         negative_prompt: Optional[str] = None,
+        seed: Optional[int] = None,
+        output_base_name: Optional[str] = None,
         client_id: Optional[str] = None,
         token: Optional[str] = None,
         upload_subfolder: Optional[str] = None,
@@ -205,21 +208,28 @@ class WorkflowTools:
         allowed_aspects = []
         if isinstance(aspect_entry, list) and aspect_entry:
             allowed_aspects = aspect_entry[0]
-        if allowed_aspects and aspect_ratio not in allowed_aspects:
+        ratio_value = aspect_ratio.split(" ")[0]
+        is_custom_ratio = bool(re.fullmatch(r"\d+\s*:\s*\d+", ratio_value))
+        normalized_custom_ratio = ratio_value.replace(" ", "")
+        if allowed_aspects and aspect_ratio not in allowed_aspects and not is_custom_ratio:
             raise ValueError(
                 f"aspect_ratio '{aspect_ratio}' not in allowed list: {allowed_aspects}"
             )
 
         patched = json.loads(json.dumps(workflow))
 
-        def _slug_aspect(value: str) -> str:
-            return (
-                value.replace(" (", "_")
-                .replace(")", "")
-                .replace(":", "x")
-                .replace(" ", "_")
-                .lower()
-            )
+        def _sanitize_base(value: str) -> str:
+            cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-")
+            return cleaned or "ComfyUI"
+
+        def _strip_comfy_counter_suffixes(value: str) -> str:
+            trimmed = value
+            while True:
+                candidate = re.sub(r"(?:__|_)\d{5}_$", "", trimmed)
+                if candidate == trimmed:
+                    break
+                trimmed = candidate.rstrip("._-")
+            return trimmed or value
 
         if "109" in patched and isinstance(patched["109"], dict):
             patched["109"].setdefault("inputs", {})["image"] = uploaded_name
@@ -228,20 +238,33 @@ class WorkflowTools:
 
         if "79" in patched and isinstance(patched["79"], dict):
             inputs = patched["79"].setdefault("inputs", {})
-            base_prefix = inputs.get("filename_prefix", "ComfyUI")
-            inputs["filename_prefix"] = f"{base_prefix}_{_slug_aspect(aspect_ratio)}"
+            ratio_slug = normalized_custom_ratio.replace(":", "x").lower()
+            base_raw = output_base_name if output_base_name is not None else Path(uploaded_name).stem
+            base_clean = _sanitize_base(_strip_comfy_counter_suffixes(base_raw))
+            prefix = f"{base_clean}__{ratio_slug}"
+            if seed is not None:
+                prefix = f"{prefix}__s{int(seed)}"
+            # Keep prefixes bounded; ComfyUI adds its own numeric counter suffix.
+            inputs["filename_prefix"] = prefix[:120].rstrip("._-") or "ComfyUI"
 
         if "115" in patched and isinstance(patched["115"], dict):
             inputs = patched["115"].setdefault("inputs", {})
-            inputs["aspect_ratio"] = aspect_ratio
-            inputs["custom_ratio"] = False
-            ratio_value = aspect_ratio.split(" ")[0]
-            inputs["custom_aspect_ratio"] = ratio_value
+            if aspect_ratio in allowed_aspects:
+                inputs["aspect_ratio"] = aspect_ratio
+                inputs["custom_ratio"] = False
+                inputs["custom_aspect_ratio"] = ratio_value
+            elif is_custom_ratio:
+                # Keep a valid enum value while using a custom ratio.
+                inputs["aspect_ratio"] = allowed_aspects[0] if allowed_aspects else "1:1 (Perfect Square)"
+                inputs["custom_ratio"] = True
+                inputs["custom_aspect_ratio"] = normalized_custom_ratio
 
         if positive_prompt is not None and "113" in patched:
             patched["113"].setdefault("inputs", {})["prompt"] = positive_prompt
         if negative_prompt is not None and "114" in patched:
             patched["114"].setdefault("inputs", {})["prompt"] = negative_prompt
+        if seed is not None and "3" in patched:
+            patched["3"].setdefault("inputs", {})["seed"] = int(seed)
 
         result = await self._client.queue_prompt(patched, client_id=client_id)
         return {

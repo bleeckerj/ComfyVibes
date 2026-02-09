@@ -8,6 +8,7 @@ __pycache__/
 *.egg-info/
 .eggs/
 
+mcp_chat_config.json
 
 
 # Virtual environments
