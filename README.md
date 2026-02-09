@@ -388,6 +388,22 @@ If you have thoughts or interest in this, open an issue or reach out.
 
 ---
 
+---
+
+## Note: Potential ComfyUI Server Fork
+
+We are considering a fork of the ComfyUI server to accommodate revealing runtime environment details that are currently opaque to MCP clients and external tooling. Specifically:
+
+- **Server CWD** — Expose the current working directory of the running ComfyUI server process so that MCP tools and automation scripts can resolve relative paths reliably.
+- **Input folder location** — Surface the absolute path to the `input/` directory for the current live run, enabling tools to upload input images, masks, and other assets to the correct location without guesswork.
+- **Output folder location** — Surface the absolute path to the `output/` directory so completed generations can be located, downloaded, and piped into downstream workflows (e.g., Photarium upload) automatically.
+
+Currently, these paths must be hardcoded or inferred from `extra_model_paths.yaml`, which is fragile and breaks across different installations, Docker deployments, and multi-GPU setups. A lightweight API endpoint (e.g., `GET /api/server-info`) that returns these paths would make ComfyUI significantly more automatable and MCP-friendly.
+
+If you have thoughts or interest in this, open an issue or reach out.
+
+---
+
 ## License
 
 MIT
