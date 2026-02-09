@@ -225,11 +225,14 @@ print(result)
 
 ## MCP Tool Surface
 
-ComfyVibes exposes two MCP servers — **ComfyMCP** for ComfyUI interaction and workflow management, and **Photarium** for image gallery, search, and asset management via Cloudflare Images. Together they provide **65+ tools** for end-to-end creative automation.
+
+ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interaction and workflow management. All tools listed below are implemented in this repository.
 
 ---
 
-### ComfyMCP Tools (17 tools)
+
+### ComfyMCP Tools
+
 
 #### ComfyUI Read Tools
 
@@ -243,6 +246,7 @@ ComfyVibes exposes two MCP servers — **ComfyMCP** for ComfyUI interaction and 
 | `comfy_embeddings_list` | Return all available embedding names for use in prompts. |
 | `list_tools` | Return tool definitions for this MCP server (self-documenting). |
 
+
 #### Workflow Management Tools
 
 | Tool | Description |
@@ -253,6 +257,7 @@ ComfyVibes exposes two MCP servers — **ComfyMCP** for ComfyUI interaction and 
 | `workflows_save` | Save a workflow entry to the store with optional metadata, params, and auth token. |
 | `workflows_delete` | Delete a workflow entry from the store by `workflow_id`. |
 
+
 #### Workflow Execution Tools
 
 | Tool | Description |
@@ -262,98 +267,6 @@ ComfyVibes exposes two MCP servers — **ComfyMCP** for ComfyUI interaction and 
 | `workflows_extract_from_artifact` | Extract an embedded workflow from a ComfyUI-generated image or video artifact (PNG, WebP, MP4, etc.). |
 | `workflows_import_from_artifact` | Extract a workflow from an artifact and save it directly to the workflow store with name, tags, and metadata. |
 | `workflows_run_aspect_ratio_adjustment` | Upload an image, set aspect ratio, and run the aspect ratio adjustment workflow. Supports positive/negative prompts, seed, and output naming. |
-
----
-
-### Photarium Tools (48 tools)
-
-#### Search & Discovery
-
-| Tool | Description |
-|------|-------------|
-| `photarium_search` | **Semantic search** using natural language and CLIP embeddings. Finds images by concept, subject, mood, or visual characteristics — even without exact text matches. |
-| `photarium_search_text` | **Text search** matching against image metadata: filename, folder name, tags, description, and alt text. Best when you know exact names or tags. |
-| `photarium_search_color` | Search for images by **dominant color**. Accepts hex codes (`#3B82F6`) or named colors (`red`). Uses color embeddings for accurate matching. |
-| `photarium_search_image` | Find images **visually similar** to a given image using its CLIP embedding. No text query needed. |
-| `photarium_similar` | Find visually or chromatically similar images. Supports `clip` (semantic) and `color` (palette) modes, with optional "strangers" for contrast. |
-| `photarium_antipode` | Find **semantic or color opposites** of an image. CLIP methods: `negate`, `stranger`, `otherwise`, `reflectroid`. Color methods: `complementary`, `histogram`, `lightness`, `negative`. |
-| `photarium_concepts` | Get **semantic concept scores** — how AI interprets visual qualities along dimensions like warm/cold, minimal/complex, playful/serious. |
-| `photarium_haiku` | Generate a haiku inspired by an image's semantic qualities (CLIP embedding). |
-
-#### Gallery & Image Management
-
-| Tool | Description |
-|------|-------------|
-| `photarium_list` | List images with optional filtering by folder, namespace, and aspect ratio class (square, horizontal, vertical). |
-| `photarium_get` | Get detailed info about a specific image — metadata, dimensions, variant URLs. |
-| `photarium_download_image` | Download an image by ID. Returns base64 data + metadata. Optionally save to a local file path. |
-| `photarium_share_url` | Get a shareable redirect URL for an image at a specific variant size (thumbnail, small, medium, large, xlarge). |
-| `photarium_rotate` | Rotate an image server-side (left, right, custom degrees, or auto-EXIF) and re-upload to Cloudflare. |
-| `photarium_delete` | **Permanently delete** a single image from the gallery. |
-| `photarium_delete_family` | Delete an entire image family (parent + all variants). Supports dry-run and async modes with job polling. |
-| `photarium_delete_family_job` | Poll the status of an async delete-family job by `jobId`. |
-| `photarium_swap_parent` | Swap the parent image for a variant family. Useful for promoting a variant to primary. |
-
-#### Upload & Import
-
-| Tool | Description |
-|------|-------------|
-| `photarium_upload_from_path` | **Upload directly from a file path** using multipart form data. No base64 encoding needed — fast and efficient for local files. |
-| `photarium_upload_url` | Upload an image from a URL. Downloaded and stored in Cloudflare Images with optional folder, tags, and metadata. |
-| `photarium_upload_file` | Upload a file via base64 data. Supports zip/Keynote bundles and metadata fields. |
-| `photarium_upload_image` | Convenience upload for base64 image data with full metadata support. |
-| `photarium_upload_external_file` | Upload via the external upload endpoint — intended for lightweight external tools. |
-| `photarium_import_url` | Import a remote image URL and return base64 data + metadata for client-side upload workflows. |
-| `photarium_animate` | Create an **animated WebP** from a sequence of frames (URLs or base64) and upload to Cloudflare Images. |
-| `photarium_uploads_list` | List paginated uploads with canonical Cloudflare URLs and metadata. |
-| `photarium_upload_download` | Download a specific upload by ID, returning base64 data + metadata. |
-
-#### Metadata & Organization
-
-| Tool | Description |
-|------|-------------|
-| `photarium_update_metadata` | Update image metadata: folder, tags, description, alt text, namespace, parent-child relationships, display name, and source URLs. |
-| `photarium_extras_get` | Get additional image extras stored outside of Cloudflare metadata (custom descriptions, alt text overrides). |
-| `photarium_extras_update` | Update image extras. Set description or alt text to `null` to clear. |
-| `photarium_list_folders` | List all available folders in the gallery, optionally filtered by namespace. |
-| `photarium_create_folder` | Create a new folder for organizing images. |
-| `photarium_list_namespaces` | List all registered namespaces for multi-tenant image organization. |
-
-#### AI Generation
-
-| Tool | Description |
-|------|-------------|
-| `photarium_generate_alt` | Generate accessibility **alt text** for an image using AI vision. Saved to metadata automatically. |
-| `photarium_generate_description` | Generate a detailed **AI description** of an image. Saved to metadata. |
-| `photarium_generate_prompt` | Generate a **text-to-image prompt** that could recreate an image. Useful for prompt engineering and understanding visual style. |
-| `photarium_prompt_get` | Get the stored PromptThis record for an image. |
-| `photarium_prompts_bulk` | Fetch stored prompts for multiple images in a single request. |
-
-#### Embeddings & Vector Search
-
-| Tool | Description |
-|------|-------------|
-| `photarium_generate_embeddings` | Generate CLIP and/or color embeddings for an image, enabling semantic and color search. |
-| `photarium_embedding_status` | Check embedding status (CLIP/color) for a specific image. |
-| `photarium_embeddings_batch` | Generate embeddings for multiple images in a single batch. |
-| `photarium_colors_bulk` | Fetch color metadata (dominant colors, average color) for multiple images. |
-| `photarium_vector_status` | Check vector search system status: Redis availability, embedding progress, index statistics. |
-| `photarium_vector_index` | Ensure the vector index exists — creates it if missing. |
-
-#### Audit & Backup
-
-| Tool | Description |
-|------|-------------|
-| `photarium_audit` | Audit CDN URLs and report broken or failing image variants. Configurable concurrency and verbosity. |
-| `photarium_backup` | Trigger a Redis database backup (RDB snapshot + compressed bundle). Auto-rotates old backups. |
-| `photarium_list_backups` | List existing Redis backups with timestamps, sizes, and types. |
-
-#### Debug
-
-| Tool | Description |
-|------|-------------|
-| `photarium_debug_raw` | Fetch raw Cloudflare Images API data for debugging. |
-| `list_tools` | Return tool definitions for the Photarium MCP server (self-documenting). |
 
 ---
 
