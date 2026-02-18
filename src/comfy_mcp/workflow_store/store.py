@@ -34,9 +34,25 @@ class WorkflowStore:
 
     _id_pattern = re.compile(r"^[A-Za-z0-9_-]+$")
 
-    def __init__(self, root: Path) -> None:
-        self._root = root.expanduser().resolve()
-        self._root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, root: Path, extra_roots: Optional[List[Path]] = None) -> None:
+        primary = root.expanduser().resolve()
+        primary.mkdir(parents=True, exist_ok=True)
+        resolved_extras: List[Path] = []
+        for candidate in (extra_roots or []):
+            resolved = candidate.expanduser().resolve()
+            if resolved == primary:
+                continue
+            if resolved in resolved_extras:
+                continue
+            resolved_extras.append(resolved)
+
+        self._root = primary
+        self._extra_roots = resolved_extras
+
+    @property
+    def roots(self) -> List[Path]:
+        """Return all workflow library roots in search order."""
+        return [self._root, *self._extra_roots]
 
     @property
     def root(self) -> Path:
@@ -45,40 +61,49 @@ class WorkflowStore:
 
     def list_entries(self) -> List[WorkflowEntry]:
         """List workflow entries present in the store."""
-        entries: List[WorkflowEntry] = []
-        for item in sorted(self._root.iterdir()):
-            if not item.is_dir():
+        by_id: Dict[str, WorkflowEntry] = {}
+        for root in self.roots:
+            if not root.exists() or not root.is_dir():
                 continue
-            workflow_path = item / WORKFLOW_FILE
-            if not workflow_path.exists():
-                continue
-            entries.append(
-                WorkflowEntry(
+            for item in sorted(root.iterdir()):
+                if not item.is_dir():
+                    continue
+                workflow_path = item / WORKFLOW_FILE
+                if not workflow_path.exists():
+                    continue
+                if item.name in by_id:
+                    continue
+                by_id[item.name] = WorkflowEntry(
                     workflow_id=item.name,
                     root=item,
                     has_meta=(item / META_FILE).exists(),
                     has_params=(item / PARAMS_FILE).exists(),
                 )
-            )
-        return entries
+
+        return [by_id[k] for k in sorted(by_id.keys())]
 
     def read_workflow(self, workflow_id: str) -> Dict[str, Any]:
         """Load workflow JSON for a given id."""
-        workflow_path = self._resolve_workflow_path(workflow_id)
-        if not workflow_path.exists():
-            raise WorkflowNotFoundError(f"Workflow not found: {workflow_id}")
+        entry_dir = self._find_entry_dir(workflow_id)
+        workflow_path = entry_dir / WORKFLOW_FILE
         return self._read_json(workflow_path)
 
     def read_meta(self, workflow_id: str) -> Optional[Dict[str, Any]]:
         """Load meta.json if present for a workflow id."""
-        meta_path = self._resolve_entry_path(workflow_id) / META_FILE
+        entry_dir = self._find_entry_dir(workflow_id, require_workflow=False)
+        if entry_dir is None:
+            raise WorkflowNotFoundError(f"Workflow not found: {workflow_id}")
+        meta_path = entry_dir / META_FILE
         if not meta_path.exists():
             return None
         return self._read_json(meta_path)
 
     def read_params(self, workflow_id: str) -> Optional[Dict[str, Any]]:
         """Load params.json if present for a workflow id."""
-        params_path = self._resolve_entry_path(workflow_id) / PARAMS_FILE
+        entry_dir = self._find_entry_dir(workflow_id, require_workflow=False)
+        if entry_dir is None:
+            raise WorkflowNotFoundError(f"Workflow not found: {workflow_id}")
+        params_path = entry_dir / PARAMS_FILE
         if not params_path.exists():
             return None
         return self._read_json(params_path)
@@ -120,6 +145,31 @@ class WorkflowStore:
         if self._root not in entry_dir.parents and entry_dir != self._root:
             raise InvalidWorkflowIdError("Workflow id escapes store root")
         return entry_dir
+
+    def _resolve_entry_path_in_root(self, root: Path, workflow_id: str) -> Path:
+        self._validate_id(workflow_id)
+        entry_dir = (root / workflow_id).resolve()
+        if root not in entry_dir.parents and entry_dir != root:
+            raise InvalidWorkflowIdError("Workflow id escapes store root")
+        return entry_dir
+
+    def _find_entry_dir(self, workflow_id: str, require_workflow: bool = True) -> Optional[Path]:
+        """Find the first workflow entry directory across all roots.
+
+        When `require_workflow` is True, the entry must contain workflow.json.
+        """
+        for root in self.roots:
+            if not root.exists() or not root.is_dir():
+                continue
+            entry_dir = self._resolve_entry_path_in_root(root, workflow_id)
+            if not entry_dir.exists() or not entry_dir.is_dir():
+                continue
+            if require_workflow and not (entry_dir / WORKFLOW_FILE).exists():
+                continue
+            return entry_dir
+        if require_workflow:
+            raise WorkflowNotFoundError(f"Workflow not found: {workflow_id}")
+        return None
 
     def _resolve_workflow_path(self, workflow_id: str) -> Path:
         return self._resolve_entry_path(workflow_id) / WORKFLOW_FILE

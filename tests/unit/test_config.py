@@ -15,3 +15,9 @@ def test_resolved_workflow_root_expands_user() -> None:
     config = load_config({"workflow_library_root": "~/tmp/comfy-mcp"})
     resolved = config.resolved_workflow_root()
     assert resolved.name == "comfy-mcp"
+
+
+def test_load_config_defaults_extra_roots_off() -> None:
+    """Extra workflow roots should be opt-in to avoid list ambiguity."""
+    config = load_config({"workflow_library_root": "~/tmp/comfy-mcp"})
+    assert config.include_extra_workflow_roots is False

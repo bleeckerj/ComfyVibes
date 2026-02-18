@@ -1,0 +1,66 @@
+{
+  "id": "aspect_comfyui_01077",
+  "name": "Aspect Ratio Adjustment (Alternate)",
+  "description": "Alternative aspect ratio workflow. Changes image aspect ratio using Qwen with FluxResolutionNode. Requires input image.",
+  "tags": [
+    "aspect-ratio",
+    "image-edit",
+    "resize",
+    "qwen"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "prompt",
+      "prompt_2",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name",
+      "cpu_offload",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "image",
+      "megapixel",
+      "megapixels",
+      "model_name",
+      "num_blocks_on_gpu",
+      "preview",
+      "resolution_steps",
+      "shift",
+      "strength",
+      "type",
+      "upscale_method",
+      "use_pin_memory",
+      "vae_name"
+    ]
+  },
+  "use_cases": [
+    "Modify an existing image while preserving composition.",
+    "Create 1:1, 4:5, or 9:16 variants for publishing surfaces."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

@@ -1,0 +1,56 @@
+{
+  "id": "flux_2_klein_4B",
+  "name": "Flux 2 Klein 4B",
+  "description": "Edit existing images with prompt-guided controls.",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "sampler",
+    "flux",
+    "upscaling"
+  ],
+  "use_cases": [
+    "Modify an existing image while preserving composition.",
+    "Increase output resolution while retaining style."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "device",
+      "filename_prefix",
+      "image",
+      "megapixels",
+      "resolution_steps",
+      "type",
+      "unet_name",
+      "upscale_method",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "schema_version": "1",
+  "workflow_id": "comfyui_01003_workflow",
+  "workflow_hash": "ebf386cdc4350c6d9036d4071f485eadfc79d32e8df8c8c7bb999086ed9f7f8b",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 241221414689977,
+      "required": false,
+      "description": "Flux.1 Kontext [max] Image.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "95",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 50,
+      "required": false,
+      "description": "Flux.1 Kontext [max] Image.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "95",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "High-quality advertising photo of a premium canned coffee drink in a sleek, refined soft brown color glass bottle, styled for a refined and high-end brand. The bottle is mid-splash, surrounded by coffee beens and steam milk droplets frozen in motion. Reserved, elegant background with soft monochrome color gradients  suggesting contemplation and intelligence. Modern studio lighting with crisp highlights and soft shadows. Composition centered on the product, with a matte, irresistible finish.",
+      "required": false,
+      "description": "Flux.1 Kontext [max] Image.prompt",
+      "target": {
+        "mode": "direct",
+        "node_id": "95",
+        "input": "prompt"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "1:1",
+      "required": false,
+      "description": "Flux.1 Kontext [max] Image.aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "95",
+        "input": "aspect_ratio"
+      }
+    },
+    {
+      "name": "direction",
+      "type": "string",
+      "default": "right",
+      "required": false,
+      "description": "Image Stitch.direction",
+      "target": {
+        "mode": "direct",
+        "node_id": "91",
+        "input": "direction"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "85",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "guidance",
+      "type": "int",
+      "default": 3,
+      "required": false,
+      "description": "Flux.1 Kontext [max] Image.guidance",
+      "target": {
+        "mode": "direct",
+        "node_id": "95",
+        "input": "guidance"
+      }
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "default": "ComfyUI_01003_.png",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "84",
+        "input": "image"
+      }
+    },
+    {
+      "name": "match_image_size",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "description": "Image Stitch.match_image_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "91",
+        "input": "match_image_size"
+      }
+    },
+    {
+      "name": "prompt_upsampling",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "Flux.1 Kontext [max] Image.prompt_upsampling",
+      "target": {
+        "mode": "direct",
+        "node_id": "95",
+        "input": "prompt_upsampling"
+      }
+    },
+    {
+      "name": "spacing_color",
+      "type": "string",
+      "default": "white",
+      "required": false,
+      "description": "Image Stitch.spacing_color",
+      "target": {
+        "mode": "direct",
+        "node_id": "91",
+        "input": "spacing_color"
+      }
+    },
+    {
+      "name": "spacing_width",
+      "type": "int",
+      "default": 8,
+      "required": false,
+      "description": "Image Stitch.spacing_width",
+      "target": {
+        "mode": "direct",
+        "node_id": "91",
+        "input": "spacing_width"
+      }
+    }
+  ]
+}

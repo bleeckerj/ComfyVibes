@@ -9,6 +9,10 @@
   },
   "system_prompt": "You are a terminal chat orchestrator. Decide when to call MCP tools, then summarize results for the user.",
   "strict_tool_facts": true,
+  "tool_description_hints": {
+    "photarium_search": "Use this for semantic and keyword image search in the Photarium catalog, including concept/color/style lookups.",
+    "photarium_*": "Photarium tools operate on the Photarium catalog and image metadata."
+  },
   "servers": [
     {
       "name": "comfy",

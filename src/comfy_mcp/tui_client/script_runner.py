@@ -11,7 +11,8 @@ from typing import Any
 
 import httpx
 
-from comfy_mcp.tui_client.config import load_config
+from comfy_mcp.tui_client.config import ServerConfig, load_config
+from comfy_mcp.tui_client.http_router import HTTPToolRouter
 from comfy_mcp.tui_client.mcp_router import MCPToolRouter
 
 
@@ -47,7 +48,16 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _list_tools(router: MCPToolRouter) -> int:
+def _build_router(servers: list[ServerConfig]):
+    """Pick HTTP or stdio router based on server config."""
+    http_servers = [s for s in servers if s.transport == "http" or s.http_url]
+    stdio_servers = [s for s in servers if s.transport != "http" and not s.http_url]
+    if stdio_servers:
+        return MCPToolRouter(servers)
+    return HTTPToolRouter(http_servers)
+
+
+async def _list_tools(router: Any) -> int:
     specs = router.list_tool_specs()
     payload = [
         {
@@ -100,15 +110,25 @@ async def _doctor(config_path: str) -> int:
 
     comfy_server = next((s for s in cfg.servers if s.name == "comfy"), None)
     if comfy_server:
-        comfy_base = (comfy_server.env or {}).get("COMFY_MCP_COMFY_BASE_URL", "http://127.0.0.1:8188")
-        checks.append(await _http_probe(f"{comfy_base.rstrip('/')}/queue"))
+        if comfy_server.transport == "http" or comfy_server.http_url:
+            base = (comfy_server.http_url or "").rstrip("/")
+            if base:
+                checks.append(await _http_probe(f"{base}/health"))
+        comfy_base = (comfy_server.env or {}).get("COMFY_MCP_COMFY_BASE_URL")
+        if comfy_base:
+            checks.append(await _http_probe(f"{comfy_base.rstrip('/')}/queue"))
 
     photarium_server = next((s for s in cfg.servers if s.name == "photarium"), None)
     if photarium_server:
-        photarium_base = (photarium_server.env or {}).get("PHOTARIUM_BASE_URL", "http://localhost:3000")
-        checks.append(await _http_probe(f"{photarium_base.rstrip('/')}/api/images?limit=1"))
+        if photarium_server.transport == "http" or photarium_server.http_url:
+            base = (photarium_server.http_url or "").rstrip("/")
+            if base:
+                checks.append(await _http_probe(f"{base}/health"))
+        photarium_base = (photarium_server.env or {}).get("PHOTARIUM_BASE_URL")
+        if photarium_base:
+            checks.append(await _http_probe(f"{photarium_base.rstrip('/')}/api/images?limit=1"))
 
-    router = MCPToolRouter(cfg.servers)
+    router = _build_router(cfg.servers)
     tool_specs = []
     try:
         await router.connect()
@@ -149,7 +169,7 @@ async def _doctor(config_path: str) -> int:
     return 0
 
 
-async def _call_tool(router: MCPToolRouter, tool: str, raw_args: str) -> int:
+async def _call_tool(router: Any, tool: str, raw_args: str) -> int:
     try:
         args = json.loads(raw_args) if raw_args else {}
         if not isinstance(args, dict):
@@ -163,7 +183,7 @@ async def _call_tool(router: MCPToolRouter, tool: str, raw_args: str) -> int:
     return 0
 
 
-async def _run_steps(router: MCPToolRouter, steps_file: str) -> int:
+async def _run_steps(router: Any, steps_file: str) -> int:
     try:
         steps_payload = json.loads(Path(steps_file).read_text(encoding="utf-8"))
         if not isinstance(steps_payload, list):
@@ -203,7 +223,7 @@ async def _amain(args: argparse.Namespace) -> int:
         return await _doctor(args.config)
 
     cfg = load_config(args.config)
-    router = MCPToolRouter(cfg.servers)
+    router = _build_router(cfg.servers)
     await router.connect()
     try:
         if args.command == "list-tools":

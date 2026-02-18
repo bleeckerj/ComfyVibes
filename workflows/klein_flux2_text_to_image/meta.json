@@ -1,0 +1,54 @@
+{
+  "id": "klein_flux2_text_to_image",
+  "name": "Klein Flux 2 Text to Image",
+  "description": "Flux2 text-to-image workflow extracted from img_00005_.png.",
+  "tags": [
+    "text-to-image",
+    "flux2",
+    "klein",
+    "qwen"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "megapixel",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  },
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

@@ -151,7 +151,7 @@
   },
   "109": {
     "inputs": {
-      "image": "IMG_6714.JPG"
+      "image": ""
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -218,7 +218,7 @@
   "115": {
     "inputs": {
       "megapixel": "1.0",
-      "aspect_ratio": "19:9 (Cinematic Ultrawide)",
+      "aspect_ratio": "4:5 (Artistic Frame)",
       "divisible_by": "64",
       "custom_ratio": false,
       "custom_aspect_ratio": "1:1"

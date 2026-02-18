@@ -33,6 +33,30 @@ ComfyVibes turns ComfyUI workflows into reusable, automation‑ready building bl
 - Patch parameters safely and run workflows on demand.
 - Query ComfyUI for nodes, models, and embeddings.
 
+## Workflow Metadata & Search
+
+Each workflow can include a `meta.json` alongside `workflow.json` inside the workflow directory.
+This lets you describe workflows in freeform language, add tags, and provide hints for LLM
+selection. Example:
+
+```json
+{
+  "id": "image_edit",
+  "name": "Image edit - clothing swap",
+  "description": "Edits a product photo to replace the model's clothing item while preserving pose and lighting.",
+  "tags": ["image-edit", "clothing", "product"],
+  "requires": {"inputs": ["image"], "params": ["positive_prompt"]}
+}
+```
+
+Use the `workflows_search` tool to find workflows by id, name, description, or tags.
+
+Generate stub metadata files for any workflows missing `meta.json`:
+
+```bash
+python scripts/generate_workflow_meta.py
+```
+
 ---
 
 ## Developer Guide
@@ -81,6 +105,50 @@ pip install -e .
 
 ```bash
 python -m comfy_mcp.mcp_server.cli
+```
+
+### Run the MCP HTTP Proxy
+
+The HTTP proxy exposes the same MCP tool surface over JSON HTTP endpoints.
+
+```bash
+python -m comfy_mcp.mcp_server.http_server
+```
+
+Defaults:
+
+- `COMFY_MCP_HTTP_BIND_HOST=127.0.0.1`
+- `COMFY_MCP_HTTP_BIND_PORT=8001`
+- `COMFY_MCP_WORKFLOW_LIBRARY_ROOT=./workflows` (via repo launcher scripts)
+- `COMFY_MCP_INCLUDE_EXTRA_WORKFLOW_ROOTS=0` (set to `1` to merge additional roots like `~/.comfy-mcp/workflows`)
+
+You can persist settings in `.env` (see [.env.example](.env.example)).
+
+If you've installed the package (for example, `pip install -e .`), you can also use:
+
+```bash
+comfy-mcp-http
+```
+
+Example:
+
+```bash
+COMFY_MCP_HTTP_BIND_PORT=8081 python -m comfy_mcp.mcp_server.http_server
+```
+
+### HTTP Proxy Smoke Test
+
+With both HTTP proxies running, you can verify connectivity using the built-in client:
+
+```bash
+python scripts/http_proxy_client.py --sample
+```
+
+Call a specific tool:
+
+```bash
+python scripts/http_proxy_client.py --server comfy --tool comfy_queue_get
+python scripts/http_proxy_client.py --server photarium --tool photarium_list --args '{"limit": 1}'
 ```
 
 ### TUI Chat Client
@@ -223,6 +291,37 @@ print(result)
 
 ---
 
+## Workflow Packaging
+
+When you import or collect many workflows, use the packaging script to normalize
+`meta.json` + `params.json` and add human-guidance metadata for capability search.
+
+1) Generate an editable hints template:
+
+```bash
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/package_workflows.py \
+  --root workflows \
+  --write-hints-template workflows_hints.json
+```
+
+2) Edit `workflows_hints.json` with fields like:
+- `name`, `description`, `tags`
+- `use_cases`, `strengths`, `tradeoffs`
+- `io_contract`, `examples`, `notes`
+
+3) Apply packaging with hints:
+
+```bash
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/package_workflows.py \
+  --root workflows \
+  --hints workflows_hints.json
+```
+
+This will infer tunable params from workflow nodes, sync `requires.params`, and
+persist capability metadata used by `workflows_capabilities_list/get`.
+
+---
+
 ## MCP Tool Surface
 
 
@@ -251,10 +350,13 @@ ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interact
 
 | Tool | Description |
 |------|-------------|
-| `workflows_list` | List all workflows stored in the workflow store with metadata. |
+| `workflows_list` | List workflows with metadata plus provenance fields (`source_root`, `source_path`, `is_primary_root`) and `params_count`. |
 | `workflows_get` | Return the full workflow JSON and metadata for a given `workflow_id`. |
 | `workflows_params_get` | Return the `params.json` for a workflow — the tunable parameter spec. |
-| `workflows_save` | Save a workflow entry to the store with optional metadata, params, and auth token. |
+| `workflows_package` | Regenerate `params.json` + capability metadata for a workflow, with optional human hints. |
+| `workflows_package_many` | Batch-package many/all workflows into MCP-ready metadata and params. |
+| `workflows_package_template_get` | Return an editable hints template (`use_cases`, `examples`, `io_contract`, etc.). |
+| `workflows_save` | Save a workflow entry and always regenerate packaged `meta.json` + `params.json` (optional metadata hints + auth token). |
 | `workflows_delete` | Delete a workflow entry from the store by `workflow_id`. |
 
 
@@ -266,6 +368,7 @@ ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interact
 | `workflows_wait` | Wait for a prompt to appear in ComfyUI history. Configurable `timeout_s` and `poll_ms`. |
 | `workflows_extract_from_artifact` | Extract an embedded workflow from a ComfyUI-generated image or video artifact (PNG, WebP, MP4, etc.). |
 | `workflows_import_from_artifact` | Extract a workflow from an artifact and save it directly to the workflow store with name, tags, and metadata. |
+| `workflows_import_from_photarium` | Pull a Photarium image workflow (`photarium_extract_workflow`) and save it to the workflow corpus. |
 | `workflows_run_aspect_ratio_adjustment` | Upload an image, set aspect ratio, and run the aspect ratio adjustment workflow. Supports positive/negative prompts, seed, and output naming. |
 
 ---

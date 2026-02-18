@@ -1,0 +1,61 @@
+{
+  "84": {
+    "inputs": {
+      "image": "ComfyUI_01003_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    },
+    "is_changed": [
+      "b8dcefe075bbb1b09055148a30cfb8e8c7d179075435a02c33d8bf739baf6084"
+    ]
+  },
+  "85": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "95",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "91": {
+    "inputs": {
+      "direction": "right",
+      "match_image_size": true,
+      "spacing_width": 8,
+      "spacing_color": "white",
+      "image1": [
+        "84",
+        0
+      ]
+    },
+    "class_type": "ImageStitch",
+    "_meta": {
+      "title": "Image Stitch"
+    }
+  },
+  "95": {
+    "inputs": {
+      "prompt": "High-quality advertising photo of a premium canned coffee drink in a sleek, refined soft brown color glass bottle, styled for a refined and high-end brand. The bottle is mid-splash, surrounded by coffee beens and steam milk droplets frozen in motion. Reserved, elegant background with soft monochrome color gradients  suggesting contemplation and intelligence. Modern studio lighting with crisp highlights and soft shadows. Composition centered on the product, with a matte, irresistible finish.",
+      "aspect_ratio": "1:1",
+      "guidance": 3,
+      "steps": 50,
+      "seed": 241221414689977,
+      "prompt_upsampling": false,
+      "input_image": [
+        "91",
+        0
+      ]
+    },
+    "class_type": "FluxKontextMaxImageNode",
+    "_meta": {
+      "title": "Flux.1 Kontext [max] Image"
+    }
+  }
+}

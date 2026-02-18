@@ -1,61 +1,73 @@
-# Python
+# Python caches and bytecode
 __pycache__/
 *.py[cod]
 *.pyd
 *.pyo
 *.so
+
+# Python packaging/build
 *.egg
 *.egg-info/
 .eggs/
-
-mcp_chat_config.json
-
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-.env/
-
-# Packaging / build
 build/
 dist/
 *.whl
 pip-wheel-metadata/
 
-# Test / coverage
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+comfy-metadata-check
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+mcp_chat_config.json
+
+# Test, coverage, and tooling caches
 .pytest_cache/
 .coverage
 .coverage.*
 htmlcov/
-
-# Type checkers / linters
 .mypy_cache/
 .ruff_cache/
 .pyright/
+.tox/
+.nox/
 
-# Logs
+# Runtime logs and local chat artifacts
 *.log
+.mcp_chat_logs/
+.mcp_chat_artifacts/
 
-# OS / editor
+# OS/editor noise
 .DS_Store
 .idea/
 .vscode/
 
-# Misc
+# Temporary files
 *.tmp
-.DS_Store
-.venv/
+*.temp
+*.swp
+*.swo
 
-# Notes / briefs
+# Local notes/briefs
 ComfyMCP_MCP_Server_Copilot_Brief.md
 ComfyMCP_TUI_LLM_Client_Copilot_Brief.md
 IMPLEMENTATION_PLAN.md
 
-# Local test artifacts
-ComfyUI_00356__api.json
-ComfyUI_00356__params.json
-FooBar_UI_00057.json
-available_models.json
-available_nodes.txt
-extracted_workflow.json
+# Local scratch/test artifacts in repo root
+/ComfyUI_*.json
+/FooBar_*.json
+/available_models.json
+/available_nodes.txt
+/extracted_workflow.json
+/downloaded_image.png
+/d9f85028-*.png
+/9ef68f3e-*.png
+/7501e1e4-*.png
+/16111945-*.png
+/ef2f7fce-*.png

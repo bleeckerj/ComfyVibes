@@ -1,0 +1,56 @@
+{
+  "id": "8-bit-image-maker",
+  "name": "8-Bit Image Maker",
+  "description": "Generate 8-bit pixel art style images from text prompts using Flux/Qwen with dithering aesthetic. Text-to-image, no input image required.",
+  "tags": [
+    "text-to-image",
+    "8-bit",
+    "pixel-art",
+    "dither",
+    "aesthetic",
+    "qwen"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "width",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "cpu_offload",
+      "device",
+      "filename_prefix",
+      "model_name",
+      "num_blocks_on_gpu",
+      "shift",
+      "type",
+      "use_pin_memory",
+      "vae_name"
+    ]
+  },
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

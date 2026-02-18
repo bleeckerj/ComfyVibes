@@ -1,0 +1,66 @@
+{
+  "id": "image_edit",
+  "name": "Qwen Image Edit",
+  "description": "Edit an existing image using Qwen/Flux with positive and negative text prompts. Requires an input image. Supports aspect ratio control via FluxResolutionNode.",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "qwen",
+    "flux",
+    "prompt-guided"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "prompt",
+      "prompt_2",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name",
+      "cpu_offload",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "image",
+      "megapixel",
+      "megapixels",
+      "model_name",
+      "num_blocks_on_gpu",
+      "preview",
+      "resolution_steps",
+      "shift",
+      "strength",
+      "type",
+      "upscale_method",
+      "use_pin_memory",
+      "vae_name"
+    ]
+  },
+  "use_cases": [
+    "Modify an existing image while preserving composition."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

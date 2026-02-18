@@ -1,0 +1,262 @@
+{
+  "3": {
+    "_meta": {
+      "title": "KSampler"
+    },
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 1,
+      "denoise": 1,
+      "latent_image": [
+        "116",
+        0
+      ],
+      "model": [
+        "102",
+        0
+      ],
+      "negative": [
+        "114",
+        0
+      ],
+      "positive": [
+        "113",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "seed": 861234789,
+      "steps": 8
+    }
+  },
+  "8": {
+    "_meta": {
+      "title": "VAE Decode"
+    },
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    }
+  },
+  "38": {
+    "_meta": {
+      "title": "Load CLIP"
+    },
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "device": "default",
+      "type": "qwen_image"
+    }
+  },
+  "39": {
+    "_meta": {
+      "title": "Load VAE"
+    },
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    }
+  },
+  "66": {
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "110",
+        0
+      ],
+      "shift": 3
+    }
+  },
+  "79": {
+    "_meta": {
+      "title": "Save Image"
+    },
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "pink_metallic",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "100": {
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "109",
+        0
+      ],
+      "megapixels": 1,
+      "resolution_steps": 1,
+      "upscale_method": "lanczos"
+    }
+  },
+  "102": {
+    "_meta": {
+      "title": "CFGNorm"
+    },
+    "class_type": "CFGNorm",
+    "inputs": {
+      "model": [
+        "66",
+        0
+      ],
+      "strength": 1
+    }
+  },
+  "103": {
+    "_meta": {
+      "title": "Image Comparer (rgthree)"
+    },
+    "class_type": "Image Comparer (rgthree)",
+    "inputs": {
+      "image_a": [
+        "100",
+        0
+      ],
+      "image_b": [
+        "8",
+        0
+      ],
+      "rgthree_comparer": {
+        "images": [
+          {
+            "name": "A",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_jpbue_00013_.png&type=temp&subfolder=&rand=0.15326881451604113"
+          },
+          {
+            "name": "B",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_jpbue_00014_.png&type=temp&subfolder=&rand=0.42699759519012304"
+          }
+        ]
+      }
+    }
+  },
+  "109": {
+    "_meta": {
+      "title": "Load Image"
+    },
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "autotrader_00505__900px (1).jpg"
+    },
+    "is_changed": [
+      "1fcd76b6e5b39b9a579c34207e911b700e515524e9937ac6296e518ec46090b9"
+    ]
+  },
+  "110": {
+    "_meta": {
+      "title": "Nunchaku Qwen-Image DiT Loader"
+    },
+    "class_type": "NunchakuQwenImageDiTLoader",
+    "inputs": {
+      "cpu_offload": "auto",
+      "model_name": "svdq-int4_r128-qwen-image-edit-2509-lightningv2.0-8steps.safetensors",
+      "num_blocks_on_gpu": 1,
+      "use_pin_memory": "disable"
+    }
+  },
+  "113": {
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "38",
+        0
+      ],
+      "image1": [
+        "100",
+        0
+      ],
+      "prompt": "the car is now metallic bright pink",
+      "vae": [
+        "39",
+        0
+      ]
+    }
+  },
+  "114": {
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": [
+        "38",
+        0
+      ],
+      "image1": [
+        "100",
+        0
+      ],
+      "prompt": "",
+      "vae": [
+        "39",
+        0
+      ]
+    }
+  },
+  "115": {
+    "_meta": {
+      "title": "Flux Resolution Calc"
+    },
+    "class_type": "FluxResolutionNode",
+    "inputs": {
+      "aspect_ratio": "21:9 (Epic Ultrawide)",
+      "custom_aspect_ratio": "21:9",
+      "custom_ratio": false,
+      "divisible_by": "64",
+      "megapixel": "1.5"
+    }
+  },
+  "116": {
+    "_meta": {
+      "title": "EmptySD3LatentImage"
+    },
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": [
+        "115",
+        1
+      ],
+      "width": [
+        "115",
+        0
+      ]
+    }
+  },
+  "117": {
+    "_meta": {
+      "title": "Preview as Text"
+    },
+    "class_type": "PreviewAny",
+    "inputs": {
+      "preview": "896 x 1664",
+      "previewMode": null,
+      "source": [
+        "115",
+        2
+      ]
+    }
+  }
+}

@@ -1,0 +1,247 @@
+{
+  "schema_version": "1",
+  "workflow_id": "klein_flux2_text_to_image",
+  "workflow_hash": "40e6ca2243e86130581ba67ebf4842ad6ae3a2c9c413e5df6f4902519fadf952",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 567682720312625,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 4,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "Empty Flux 2 Latent.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "197",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "positive_prompt",
+      "type": "string",
+      "default": "\n",
+      "required": false,
+      "description": "CLIP Text Encode (Positive Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "6",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "euler",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "simple",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "3:2 (Golden Landscape)",
+      "required": false,
+      "description": "Flux Resolution Calc.aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "209",
+        "input": "aspect_ratio"
+      }
+    },
+    {
+      "name": "clip_name",
+      "type": "string",
+      "default": "qwen_3_4b.safetensors",
+      "required": false,
+      "description": "Load CLIP.clip_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "195",
+        "input": "clip_name"
+      }
+    },
+    {
+      "name": "custom_aspect_ratio",
+      "type": "string",
+      "default": "1:1",
+      "required": false,
+      "description": "Flux Resolution Calc.custom_aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "209",
+        "input": "custom_aspect_ratio"
+      }
+    },
+    {
+      "name": "custom_ratio",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "Flux Resolution Calc.custom_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "209",
+        "input": "custom_ratio"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load CLIP.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "195",
+        "input": "device"
+      }
+    },
+    {
+      "name": "divisible_by",
+      "type": "string",
+      "default": "64",
+      "required": false,
+      "description": "Flux Resolution Calc.divisible_by",
+      "target": {
+        "mode": "direct",
+        "node_id": "209",
+        "input": "divisible_by"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "img",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "203",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "megapixel",
+      "type": "string",
+      "default": "1.0",
+      "required": false,
+      "description": "Flux Resolution Calc.megapixel",
+      "target": {
+        "mode": "direct",
+        "node_id": "209",
+        "input": "megapixel"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "flux2",
+      "required": false,
+      "description": "Load CLIP.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "195",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "flux2\\flux-2-klein-4b-fp8.safetensors",
+      "required": false,
+      "description": "Load Diffusion Model.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "194",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "flux2-vae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "196",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load Diffusion Model.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "194",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

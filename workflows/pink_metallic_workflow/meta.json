@@ -1,0 +1,66 @@
+{
+  "id": "pink_metallic_workflow",
+  "name": "Pink Metallic Image Edit",
+  "description": "Image editing workflow with pink metallic aesthetic. Requires an input image and edit prompts.",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "qwen",
+    "aesthetic",
+    "metallic"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "prompt",
+      "prompt_2",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name",
+      "cpu_offload",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "image",
+      "megapixel",
+      "megapixels",
+      "model_name",
+      "num_blocks_on_gpu",
+      "preview",
+      "resolution_steps",
+      "shift",
+      "strength",
+      "type",
+      "upscale_method",
+      "use_pin_memory",
+      "vae_name"
+    ]
+  },
+  "use_cases": [
+    "Modify an existing image while preserving composition."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

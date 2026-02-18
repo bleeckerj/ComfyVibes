@@ -53,3 +53,37 @@ def test_invalid_workflow_id_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidWorkflowIdError):
         store.save_workflow("../escape", {"1": {"class_type": "A", "inputs": {}}})
+
+
+def test_read_workflow_from_extra_root(tmp_path: Path) -> None:
+    """WorkflowStore should read workflows from extra roots when missing in primary."""
+    primary = tmp_path / "primary"
+    secondary = tmp_path / "secondary"
+    primary.mkdir()
+    secondary.mkdir()
+
+    secondary_store = WorkflowStore(secondary)
+    secondary_store.save_workflow("from_secondary", {"1": {"class_type": "A", "inputs": {"x": 1}}})
+
+    store = WorkflowStore(primary, extra_roots=[secondary])
+    loaded = store.read_workflow("from_secondary")
+    assert loaded == {"1": {"class_type": "A", "inputs": {"x": 1}}}
+
+
+def test_list_entries_merges_roots_preferring_primary(tmp_path: Path) -> None:
+    """list_entries should union entries across roots, preferring primary on id collisions."""
+    primary = tmp_path / "primary"
+    secondary = tmp_path / "secondary"
+    primary.mkdir()
+    secondary.mkdir()
+
+    WorkflowStore(primary).save_workflow("shared", {"1": {"class_type": "P", "inputs": {}}})
+    WorkflowStore(secondary).save_workflow("shared", {"1": {"class_type": "S", "inputs": {}}})
+    WorkflowStore(secondary).save_workflow("only_secondary", {"1": {"class_type": "S", "inputs": {}}})
+
+    store = WorkflowStore(primary, extra_roots=[secondary])
+    entries = store.list_entries()
+    ids = [e.workflow_id for e in entries]
+    assert ids == ["only_secondary", "shared"]
+    shared = next(e for e in entries if e.workflow_id == "shared")
+    assert shared.root.parent == primary

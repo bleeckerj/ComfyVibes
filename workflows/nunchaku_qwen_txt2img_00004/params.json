@@ -1,0 +1,247 @@
+{
+  "schema_version": "1",
+  "workflow_id": "nunchaku_qwen_txt2img_00004",
+  "workflow_hash": "7f31111cb1e97e60cc3bcafc66988cc95495a023644e9d8872c08e01be906349",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 78227850366343,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 4,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "height",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.height",
+      "target": {
+        "mode": "direct",
+        "node_id": "76",
+        "input": "height"
+      }
+    },
+    {
+      "name": "width",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.width",
+      "target": {
+        "mode": "direct",
+        "node_id": "76",
+        "input": "width"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "EmptySD3LatentImage.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "76",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "positive_prompt",
+      "type": "string",
+      "default": "dithered image using Floyd–Steinberg dithering, high contrast, limited color palette, visible pixel texture, halftone-style shading, sharp edges, bitmap raster aesthetic. No smooth gradients, no photorealism.",
+      "required": false,
+      "description": "CLIP Text Encode (Positive Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "6",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "res_multistep",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "simple",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "clip_name",
+      "type": "string",
+      "default": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "required": false,
+      "description": "Load CLIP.clip_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "38",
+        "input": "clip_name"
+      }
+    },
+    {
+      "name": "cpu_offload",
+      "type": "string",
+      "default": "auto",
+      "required": false,
+      "description": "Nunchaku Qwen-Image DiT Loader.cpu_offload",
+      "target": {
+        "mode": "direct",
+        "node_id": "115",
+        "input": "cpu_offload"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load CLIP.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "38",
+        "input": "device"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "img",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "108",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "model_name",
+      "type": "string",
+      "default": "svdq-int4_r32-qwen-image-lightningv1.0-4steps.safetensors",
+      "required": false,
+      "description": "Nunchaku Qwen-Image DiT Loader.model_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "115",
+        "input": "model_name"
+      }
+    },
+    {
+      "name": "num_blocks_on_gpu",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "Nunchaku Qwen-Image DiT Loader.num_blocks_on_gpu",
+      "target": {
+        "mode": "direct",
+        "node_id": "115",
+        "input": "num_blocks_on_gpu"
+      }
+    },
+    {
+      "name": "shift",
+      "type": "int",
+      "default": 3,
+      "required": false,
+      "description": "ModelSamplingAuraFlow.shift",
+      "target": {
+        "mode": "direct",
+        "node_id": "66",
+        "input": "shift"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "qwen_image",
+      "required": false,
+      "description": "Load CLIP.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "38",
+        "input": "type"
+      }
+    },
+    {
+      "name": "use_pin_memory",
+      "type": "string",
+      "default": "disable",
+      "required": false,
+      "description": "Nunchaku Qwen-Image DiT Loader.use_pin_memory",
+      "target": {
+        "mode": "direct",
+        "node_id": "115",
+        "input": "use_pin_memory"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "qwen_image_vae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "39",
+        "input": "vae_name"
+      }
+    }
+  ]
+}

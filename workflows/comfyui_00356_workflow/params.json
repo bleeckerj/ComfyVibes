@@ -1,0 +1,247 @@
+{
+  "schema_version": "1",
+  "workflow_id": "comfyui_00356_workflow",
+  "workflow_hash": "8edbbc5a6ba42353c35c03edec69e6309a62f65b307510e1e8c6efaddb0e1543",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 108597444628822,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 30,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "height",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.height",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "height"
+      }
+    },
+    {
+      "name": "width",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.width",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "width"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "EmptySD3LatentImage.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "a Liebherr LTM 1100 Recreational Vehicle travel leisure exploration vehicle expedition for exploring urban areas of los angeles",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "6",
+        "input": "text"
+      }
+    },
+    {
+      "name": "prompt_2",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "7",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "dpmpp_2m",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "sgm_uniform",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "clip_name1",
+      "type": "string",
+      "default": "clipLCLIPGFullFP32_zer0intVisionCLIPL.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name1",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "clip_name1"
+      }
+    },
+    {
+      "name": "clip_name2",
+      "type": "string",
+      "default": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name2",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "clip_name2"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "DualCLIPLoader.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "device"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "9",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "guidance",
+      "type": "float",
+      "default": 3.5,
+      "required": false,
+      "description": "FluxGuidance.guidance",
+      "target": {
+        "mode": "direct",
+        "node_id": "11",
+        "input": "guidance"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "flux",
+      "required": false,
+      "description": "DualCLIPLoader.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "fluxmania_V.safetensors",
+      "required": false,
+      "description": "Load Diffusion Model.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "13",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "ae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "14",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load Diffusion Model.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "13",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

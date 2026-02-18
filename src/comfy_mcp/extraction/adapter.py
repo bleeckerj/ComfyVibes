@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from comfy_mcp.extraction.normalize import detect_workflow_format, ui_to_api_format
-from comfy_mcp.workflow_store.hashing import sha256_json
+from comfy_mcp.params.infer import infer_params_spec
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ class WorkflowExtractor:
             encoding="utf-8",
         )
         params_path.write_text(
-            _to_json(_build_params_spec(name, api_workflow)),
+            _to_json(infer_params_spec(name, api_workflow)),
             encoding="utf-8",
         )
 
@@ -82,16 +82,6 @@ class WorkflowExtractor:
             ) from exc
 
         return WorkflowManager()
-
-
-def _build_params_spec(workflow_id: str, workflow_json: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a minimal ParamSpec with no overrides."""
-    return {
-        "schema_version": "1",
-        "workflow_id": workflow_id,
-        "workflow_hash": sha256_json(workflow_json),
-        "params": [],
-    }
 
 
 def _to_json(payload: Dict[str, Any]) -> str:
