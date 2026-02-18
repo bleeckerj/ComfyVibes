@@ -393,6 +393,87 @@ async def test_workflow_tools_run_auto_preserves_aspect_from_local_input(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_workflow_tools_run_auto_preserves_aspect_when_defaults_are_passed(tmp_path: Path) -> None:
+    """Auto-preserve should still apply when caller passes default aspect fields."""
+    store = WorkflowStore(tmp_path)
+    workflow = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
+        "115": {
+            "class_type": "FluxResolutionNode",
+            "inputs": {
+                "aspect_ratio": "19:9 (Cinematic Ultrawide)",
+                "custom_ratio": False,
+                "custom_aspect_ratio": "1:1",
+            },
+        },
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1}},
+    }
+    params = {
+        "schema_version": "1",
+        "workflow_id": "demo",
+        "workflow_hash": sha256_json(workflow),
+        "params": [
+            {
+                "name": "image",
+                "type": "string",
+                "required": True,
+                "target": {"mode": "direct", "node_id": "1", "input": "image"},
+            },
+            {
+                "name": "aspect_ratio",
+                "type": "string",
+                "default": "19:9 (Cinematic Ultrawide)",
+                "required": False,
+                "target": {"mode": "direct", "node_id": "115", "input": "aspect_ratio"},
+            },
+            {
+                "name": "custom_ratio",
+                "type": "bool",
+                "default": False,
+                "required": False,
+                "target": {"mode": "direct", "node_id": "115", "input": "custom_ratio"},
+            },
+            {
+                "name": "custom_aspect_ratio",
+                "type": "string",
+                "default": "1:1",
+                "required": False,
+                "target": {"mode": "direct", "node_id": "115", "input": "custom_aspect_ratio"},
+            },
+        ],
+    }
+    store.save_workflow("demo", workflow, params=params)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    client = FakeComfyClientWithAspectEnum()
+    tools = WorkflowTools(store, client, policy, extractor=FakeExtractor())
+
+    png_1x1 = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+c6xkAAAAASUVORK5CYII="
+    )
+    source_image = tmp_path / "source.png"
+    source_image.write_bytes(png_1x1)
+
+    result = await tools.run(
+        "demo",
+        {
+            "image": str(source_image),
+            "aspect_ratio": "19:9 (Cinematic Ultrawide)",
+            "custom_ratio": False,
+            "custom_aspect_ratio": "1:1",
+        },
+    )
+
+    assert result["prompt_id"] == "abc123"
+    assert result["auto_aspect_ratio_source"] == "1:1"
+    assert result["auto_aspect_ratio_applied"] == "1:1"
+    assert result["auto_aspect_ratio_anchor"] == "1:1 (Perfect Square)"
+    assert client.last_prompt is not None
+    assert client.last_prompt["115"]["inputs"]["aspect_ratio"] == "1:1 (Perfect Square)"
+    assert client.last_prompt["115"]["inputs"]["custom_ratio"] is True
+    assert client.last_prompt["115"]["inputs"]["custom_aspect_ratio"] == "1:1"
+
+
+@pytest.mark.asyncio
 async def test_run_aspect_ratio_adjustment_honors_wait_timeout_overrides(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

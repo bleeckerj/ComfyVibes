@@ -241,22 +241,26 @@ class ChatApp(App):
 
     def _handle_local_command(self, user_text: str) -> bool:
         command = user_text.strip().lower()
-        if command == "/reset":
+        command_name = command.split(maxsplit=1)[0] if command else ""
+        if command_name == "/reset":
             self._reset_conversation()
             return True
-        if command == "/help":
+        if command_name == "/help":
             self._show_help()
             return True
-        if command == "/status":
+        if command_name == "/status":
             self._show_status()
             return True
-        if command.startswith("/aspect"):
+        if command_name in {"/aspect", "/ar"}:
             self._run_aspect_flow(user_text)
             return True
-        if command.startswith("/moodboard"):
+        if command_name in {"/importwf", "/importworkflow"}:
+            self._run_import_workflow_flow(user_text)
+            return True
+        if command_name == "/moodboard":
             self._run_moodboard_flow(user_text)
             return True
-        if command.startswith("/tanktracks"):
+        if command_name == "/tanktracks":
             self._run_tanktracks_flow(user_text)
             return True
         return False
@@ -271,8 +275,12 @@ class ChatApp(App):
             "- /moodboard <brief> run an agentic mood-board flow",
         )
         self._write_chat(
-            "- [cyan]/aspect <image_id> targets=...[/cyan] run nearest-neighbor aspect-ratio flow",
-            "- /aspect <image_id> targets=... run nearest-neighbor aspect-ratio flow",
+            "- [cyan]/aspect <image_id> targets=...[/cyan] (alias: [cyan]/ar[/cyan]) run nearest-neighbor aspect-ratio flow",
+            "- /aspect <image_id> targets=... (alias: /ar) run nearest-neighbor aspect-ratio flow",
+        )
+        self._write_chat(
+            "- [cyan]/importwf <image_id> [id=workflow_id][/cyan] (alias: [cyan]/importworkflow[/cyan]) import embedded Photarium workflow into catalog",
+            "- /importwf <image_id> [id=workflow_id] (alias: /importworkflow) import embedded Photarium workflow into catalog",
         )
         self._write_chat(
             "- [cyan]/tanktracks <image_id>[/cyan] run the add-tank-tracks variant flow",
@@ -310,19 +318,19 @@ class ChatApp(App):
         self._write_chat("[bold]Aspect Flow Usage[/bold]", "Aspect Flow Usage")
         self._write_chat(
             (
-                "[dim]/aspect <image_id> targets=16:9,4:5,3:2,9:16 "
+                "[dim]/aspect|/ar <image_id> targets=16:9,4:5,3:2,9:16 "
                 "[workflow=aspect_ratio_adjustment] [parent=<image_id>] [source=1:1] "
                 "[max_delta=0.45] [preserve=\"...\"] [negative=\"...\"][/dim]"
             ),
             (
-                "/aspect <image_id> targets=16:9,4:5,3:2,9:16 "
+                "/aspect|/ar <image_id> targets=16:9,4:5,3:2,9:16 "
                 "[workflow=aspect_ratio_adjustment] [parent=<image_id>] [source=1:1] "
                 "[max_delta=0.45] [preserve=\"...\"] [negative=\"...\"]"
             ),
         )
         self._write_chat(
-            "[dim]Example: /aspect 75e92a7e-2838-45a7-6f2c-32a5fde6c300 targets=16:9,4:5,3:2,9:16 source=1:1[/dim]",
-            "Example: /aspect 75e92a7e-2838-45a7-6f2c-32a5fde6c300 targets=16:9,4:5,3:2,9:16 source=1:1",
+            "[dim]Example: /ar 75e92a7e-2838-45a7-6f2c-32a5fde6c300 targets=16:9,4:5,3:2,9:16 source=1:1[/dim]",
+            "Example: /ar 75e92a7e-2838-45a7-6f2c-32a5fde6c300 targets=16:9,4:5,3:2,9:16 source=1:1",
         )
 
     def _show_tanktracks_usage(self) -> None:
@@ -334,6 +342,23 @@ class ChatApp(App):
         self._write_chat(
             "[dim]Example: /tanktracks 1cc224eb-022b-4ce9-0dd8-3f274f4f4300[/dim]",
             "Example: /tanktracks 1cc224eb-022b-4ce9-0dd8-3f274f4f4300",
+        )
+
+    def _show_import_workflow_usage(self) -> None:
+        self._write_chat("[bold]Import Workflow Flow Usage[/bold]", "Import Workflow Flow Usage")
+        self._write_chat(
+            (
+                "[dim]/importwf|/importworkflow <image_id> [id=workflow_id] [name=\"...\"] "
+                "[tags=tag1,tag2] [desc=\"...\"] [url=http://127.0.0.1:8787][/dim]"
+            ),
+            (
+                "/importwf|/importworkflow <image_id> [id=workflow_id] [name=\"...\"] "
+                "[tags=tag1,tag2] [desc=\"...\"] [url=http://127.0.0.1:8787]"
+            ),
+        )
+        self._write_chat(
+            "[dim]Example: /importwf b287f5ef-2901-4e27-f6b4-b483fc4a7e00 id=tank_tracks_v1 tags=photarium,imported desc=\"Tank tracks edit workflow\"[/dim]",
+            "Example: /importwf b287f5ef-2901-4e27-f6b4-b483fc4a7e00 id=tank_tracks_v1 tags=photarium,imported desc=\"Tank tracks edit workflow\"",
         )
 
     @staticmethod
@@ -553,6 +578,73 @@ class ChatApp(App):
             return
         self.run_worker(self._process_message(flow_prompt), exclusive=False)
 
+    def _run_import_workflow_flow(self, user_text: str) -> None:
+        raw = user_text.strip()
+        parts = raw.split(maxsplit=1)
+        remainder = parts[1].strip() if len(parts) > 1 else ""
+        if self._is_local_help_request(remainder):
+            self._show_import_workflow_usage()
+            return
+
+        workflow_id_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:id|workflow|workflow_id)\s*=\s*([A-Za-z0-9_-]+)(?=\s|$)",
+        )
+        tags_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)tags\s*=\s*([A-Za-z0-9,_-]+)(?=\s|$)",
+        )
+        mcp_url_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:url|mcp|photarium_url)\s*=\s*(https?://[^\s]+)(?=\s|$)",
+        )
+        name_value, remainder = self._extract_local_field(
+            remainder,
+            r'(?:^|\s)name\s*=\s*"([^"]+)"(?=\s|$)',
+        )
+        if name_value is None:
+            name_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)name\s*=\s*'([^']+)'(?=\s|$)",
+            )
+        desc_value, remainder = self._extract_local_field(
+            remainder,
+            r'(?:^|\s)(?:desc|description)\s*=\s*"([^"]+)"(?=\s|$)',
+        )
+        if desc_value is None:
+            desc_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:desc|description)\s*=\s*'([^']+)'(?=\s|$)",
+            )
+
+        image_id = remainder.split(maxsplit=1)[0] if remainder else ""
+        image_id = image_id.strip()
+        if not image_id:
+            self._show_import_workflow_usage()
+            return
+
+        workflow_id = workflow_id_value or f"photarium_{image_id.split('-')[0]}_workflow"
+        workflow_name = name_value or workflow_id
+        tags = [item.strip() for item in (tags_value or "photarium,imported").split(",") if item.strip()]
+        mcp_url = mcp_url_value or "http://127.0.0.1:8787"
+
+        flow_prompt = self._build_import_workflow_flow_prompt(
+            image_id=image_id,
+            workflow_id=workflow_id,
+            workflow_name=workflow_name,
+            tags=tags,
+            description=desc_value,
+            photarium_mcp_url=mcp_url,
+        )
+        self._write_chat(
+            f"[bold cyan]Import Workflow Flow:[/bold cyan] image={image_id} id={workflow_id}",
+            f"Import Workflow Flow: image={image_id} id={workflow_id}",
+        )
+        if not self._is_ready:
+            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
+            return
+        self.run_worker(self._process_message(flow_prompt), exclusive=False)
+
     @staticmethod
     def _build_moodboard_flow_prompt(
         *,
@@ -623,7 +715,7 @@ class ChatApp(App):
             f"Source catalog image ID: {source_id}\n"
             f"Requested target aspect ratios: {target_text}\n"
             f"Source ratio hint: {source_hint_text}\n"
-            f"Upload variants under image ID: {variant_of}\n"
+            f"Requested upload target image ID: {variant_of}\n"
             f"Workflow preference: {workflow_id}\n"
             f"Max safe per-step ratio delta (log-space): {max_delta:.2f}\n"
             f"Positive preservation guidance: {preserve_text}\n"
@@ -638,9 +730,11 @@ class ChatApp(App):
             "7. Execute each step with workflows_run_aspect_ratio_adjustment using workflow_id and the previous step output as image_path.\n"
             "8. Include positive and negative guidance each step to preserve subject and scene integrity.\n"
             "9. After each run, verify output_images and do sanity checks for subject retention; if drift/ghosting appears, retry with closer intermediate and stronger guidance.\n"
-            "10. Upload final outputs as Photarium variants under the target parent image ID and return a concise ratio->image_id mapping.\n"
-            "11. Include step traces (source->...->target) for each requested ratio.\n"
-            "12. Do not ask for CLI commands or scripts; complete with available MCP tools.\n"
+            "10. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+            "11. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 10.\n"
+            "12. Upload final outputs as Photarium variants under the effective parent image ID and return a concise ratio->image_id mapping.\n"
+            "13. Include step traces (source->...->target) for each requested ratio.\n"
+            "14. Do not ask for CLI commands or scripts; complete with available MCP tools.\n"
         )
 
     @staticmethod
@@ -656,16 +750,51 @@ class ChatApp(App):
             "TANK TRACKS FLOW REQUEST\n"
             "Run this as an agentic multi-step flow inside the TUI.\n\n"
             f"Source catalog image ID: {source_id}\n"
-            f"Upload variant under image ID: {variant_of}\n"
+            f"Requested upload target image ID: {variant_of}\n"
             f"Workflow preference: {workflow_id}\n"
             f"Prompt override: {prompt_text}\n\n"
             "Execution rules:\n"
             "1. Retrieve the source image from Photarium by canonical image ID (not display name).\n"
             "2. Confirm workflow capability and parameters before execution.\n"
-            "3. Run the selected image-edit workflow against the downloaded image.\n"
-            "4. Apply prompt override if provided; otherwise keep workflow defaults.\n"
-            "5. Upload the best output image as a variant of the target image ID.\n"
-            "6. Report the uploaded catalog image ID and concise tool-call trace.\n"
+            "3. Determine source dimensions before running: prefer Photarium width/height metadata; otherwise call workflows_image_info on the downloaded file.\n"
+            "4. Run the selected image-edit workflow against the downloaded image.\n"
+            "5. Preserve source aspect ratio by setting workflow aspect controls to match source ratio (custom_ratio=true, custom_aspect_ratio=W:H, and nearest valid aspect_ratio anchor if required).\n"
+            "6. Apply prompt override if provided; otherwise keep workflow defaults.\n"
+            "7. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+            "8. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 7.\n"
+            "9. Upload the best output image as a variant of the effective parent image ID.\n"
+            "10. Report the uploaded catalog image ID, effective parent ID, source ratio used, and concise tool-call trace.\n"
+            "11. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+        )
+
+    @staticmethod
+    def _build_import_workflow_flow_prompt(
+        *,
+        image_id: str,
+        workflow_id: str,
+        workflow_name: str,
+        tags: List[str],
+        description: str | None,
+        photarium_mcp_url: str,
+    ) -> str:
+        desc_text = description or f"Imported from Photarium image {image_id}"
+        tags_text = ", ".join(tags) if tags else "photarium, imported"
+        return (
+            "IMPORT WORKFLOW FLOW REQUEST\n"
+            "Run this as an agentic shortcut flow inside the TUI.\n\n"
+            f"Source Photarium image ID: {image_id}\n"
+            f"Target workflow_id: {workflow_id}\n"
+            f"Workflow display name: {workflow_name}\n"
+            f"Workflow tags: {tags_text}\n"
+            f"Workflow description hint: {desc_text}\n"
+            f"Photarium MCP URL: {photarium_mcp_url}\n\n"
+            "Execution rules:\n"
+            "1. Call workflows_import_from_photarium with image_id, workflow_id, photarium_mcp_url, name, tags, and hints.description.\n"
+            "2. Keep include_suggestions=true and prefer_prompt=true unless a hard failure requires retry.\n"
+            "3. If import fails because embedded workflow is missing, report that clearly and stop.\n"
+            "4. On success, verify with workflows_get and workflows_params_get for the new workflow_id.\n"
+            "5. Confirm packaged sidecars exist (workflow.json, meta.json, params.json) via the workflow tool results.\n"
+            "6. Return concise summary: workflow_id, source image_id, params_count, and any notable packaging warnings.\n"
             "7. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
         )
 
@@ -878,6 +1007,32 @@ class ChatApp(App):
                     result_text = json.dumps(display_result, indent=2)
                     self._write_chat(result_text, result_text)
             return
+
+        tool_failures = [event for event in tool_events if event.error]
+        tool_successes = [event for event in tool_events if not event.error]
+        if tool_failures and not tool_successes:
+            self._write_chat(
+                "[red]Tool execution failed:[/red] no successful tool results were produced.",
+                "Tool execution failed: no successful tool results were produced.",
+            )
+            for event in tool_failures[:3]:
+                self._write_chat(
+                    f"[red]- {event.name}: {event.error}[/red]",
+                    f"- {event.name}: {event.error}",
+                )
+            if len(tool_failures) > 3:
+                remaining = len(tool_failures) - 3
+                self._write_chat(
+                    f"[red]- ... and {remaining} more failures[/red]",
+                    f"- ... and {remaining} more failures",
+                )
+            return
+
+        if tool_failures:
+            self._write_chat(
+                "[yellow]Completed with tool errors.[/yellow] Verify outputs and check tool log details.",
+                "Completed with tool errors. Verify outputs and check tool log details.",
+            )
 
         if assistant_text and not _assistant_content_emitted:
             self._write_chat(

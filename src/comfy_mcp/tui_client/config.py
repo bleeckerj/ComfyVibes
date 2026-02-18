@@ -100,6 +100,7 @@ TOOL_DISCOVERY_POLICY = PromptPolicy(
     title="TOOL DISCOVERY AND CAPABILITY CHECK:",
     rules=(
         "Before claiming a capability does not exist, review available tool names/descriptions for likely matches.",
+        "For image-edit requests, use workflows_capabilities_list/workflows_search first and prioritize workflow_id 'flux_2_klein_4B' unless the user explicitly requests a different workflow.",
         "For retrieval tasks (search/find/filter/match by concept, style, color, or keyword), prefer *_search-style tools before concluding no results.",
         "For semantic image search results, always surface image IDs clearly (prefer image_id/ids over only names) so downstream tool calls can reference stable identifiers.",
         "For color-based search tools, convert natural color language to canonical RGB hex (for example 'sky blue' -> '#87ceeb') when the tool expects a color value.",

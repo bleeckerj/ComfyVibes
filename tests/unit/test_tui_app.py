@@ -7,6 +7,7 @@ from pathlib import Path
 from comfy_mcp.tui_client.app import ChatApp
 from comfy_mcp.tui_client.config import ChatClientConfig, LLMConfig, ServerConfig
 from comfy_mcp.tui_client.mcp_router import ToolSpec
+from comfy_mcp.tui_client.orchestrator import ToolEvent
 
 
 class _FakeDoc:
@@ -207,6 +208,41 @@ def test_process_message_does_not_duplicate_assistant_content(monkeypatch):
     assert chat_lines.count("Assistant: hello from model") == 1
 
 
+def test_process_message_all_tool_failures_reports_failure(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config = _config()
+    config.strict_tool_facts = False
+    app = ChatApp(config)
+    chat_lines: list[str] = []
+    tool_lines: list[str] = []
+
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    app._write_tools = lambda _markup, plain: tool_lines.append(plain)
+
+    async def _fake_process(user_text, on_progress=None, stop_after_tool_calls=False):  # noqa: ANN001
+        assert user_text == "run it"
+        assert stop_after_tool_calls is False
+        return (
+            "Looks good, completed.",
+            [
+                ToolEvent(
+                    name="workflows_run_aspect_ratio_adjustment",
+                    arguments={"workflow_id": "aspect_ratio_adjustment"},
+                    result=None,
+                    error="HTTP 503: ComfyUI unavailable",
+                )
+            ],
+        )
+
+    app._orchestrator.process = _fake_process
+
+    asyncio.run(app._process_message("run it"))
+
+    assert any("Tool execution failed: no successful tool results were produced." in line for line in chat_lines)
+    assert any("workflows_run_aspect_ratio_adjustment: HTTP 503: ComfyUI unavailable" in line for line in chat_lines)
+    assert not any(line.startswith("Assistant: Looks good, completed.") for line in chat_lines)
+
+
 def test_reset_command_clears_context(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     app = ChatApp(_config())
@@ -244,6 +280,7 @@ def test_help_command_outputs_command_list(monkeypatch):
     assert any("/status" in line for line in chat_lines)
     assert any("/reset" in line for line in chat_lines)
     assert any("/aspect" in line for line in chat_lines)
+    assert any("/ar" in line for line in chat_lines)
     assert any("/tanktracks" in line for line in chat_lines)
 
 
@@ -331,24 +368,24 @@ def test_aspect_command_shows_usage_without_required_fields(monkeypatch):
     chat_lines: list[str] = []
     app._write_chat = lambda _markup, plain: chat_lines.append(plain)
 
-    handled = app._handle_local_command("/aspect")
+    handled = app._handle_local_command("/ar")
 
     assert handled is True
     assert any("Aspect Flow Usage" in line for line in chat_lines)
-    assert any("/aspect <image_id> targets=" in line for line in chat_lines)
+    assert any("/aspect|/ar <image_id> targets=" in line for line in chat_lines)
 
 
 def test_aspect_command_explicit_help_variants_show_usage(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     app = ChatApp(_config())
-    commands = ["/aspect help", "/aspect -h", "/aspect --help"]
+    commands = ["/aspect help", "/aspect -h", "/aspect --help", "/ar help", "/ar -h", "/ar --help"]
     for command in commands:
         chat_lines: list[str] = []
         app._write_chat = lambda _markup, plain: chat_lines.append(plain)
         handled = app._handle_local_command(command)
         assert handled is True
         assert any("Aspect Flow Usage" in line for line in chat_lines)
-        assert any("/aspect <image_id> targets=" in line for line in chat_lines)
+        assert any("/aspect|/ar <image_id> targets=" in line for line in chat_lines)
 
 
 def test_aspect_command_builds_agentic_flow_prompt(monkeypatch):
@@ -364,7 +401,7 @@ def test_aspect_command_builds_agentic_flow_prompt(monkeypatch):
 
     source = "75e92a7e-2838-45a7-6f2c-32a5fde6c300"
     handled = app._handle_local_command(
-        f'/aspect {source} targets=16:9,4:5,3:2,9:16 source=1:1 max_delta=0.4 preserve="Keep scene fixed"'
+        f'/ar {source} targets=16:9,4:5,3:2,9:16 source=1:1 max_delta=0.4 preserve="Keep scene fixed"'
     )
 
     assert handled is True
@@ -375,9 +412,12 @@ def test_aspect_command_builds_agentic_flow_prompt(monkeypatch):
     assert f"Source catalog image ID: {source}" in prompt
     assert "Requested target aspect ratios: 16:9, 4:5, 3:2, 9:16" in prompt
     assert "Source ratio hint: 1:1" in prompt
+    assert f"Requested upload target image ID: {source}" in prompt
     assert "Workflow preference: aspect_ratio_adjustment" in prompt
     assert "Max safe per-step ratio delta (log-space): 0.40" in prompt
     assert "Positive preservation guidance: Keep scene fixed" in prompt
+    assert "Resolve effective upload parent before uploading" in prompt
+    assert "If upload to requested target fails parent/variant validation" in prompt
 
 
 def test_tanktracks_command_shows_usage_without_image_id(monkeypatch):
@@ -426,9 +466,14 @@ def test_tanktracks_command_builds_agentic_flow_prompt(monkeypatch):
     prompt = captured[0]
     assert "TANK TRACKS FLOW REQUEST" in prompt
     assert f"Source catalog image ID: {source}" in prompt
-    assert f"Upload variant under image ID: {source}" in prompt
+    assert f"Requested upload target image ID: {source}" in prompt
     assert "Workflow preference: add_tank_tracks" in prompt
     assert "Prompt override: Replace wheels with tank tracks" in prompt
+    assert "Determine source dimensions before running" in prompt
+    assert "workflows_image_info" in prompt
+    assert "source ratio used" in prompt
+    assert "Resolve effective upload parent before uploading" in prompt
+    assert "If upload to requested target fails parent/variant validation" in prompt
 
 
 def test_session_log_file_is_date_stamped_and_appendable(monkeypatch, tmp_path: Path):

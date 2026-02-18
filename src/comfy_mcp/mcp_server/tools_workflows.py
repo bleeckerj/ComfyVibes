@@ -276,18 +276,24 @@ class WorkflowTools:
                 if self._token_matches(token, haystack_tokens)
             )
             required_matches = 1 if len(query_tokens) <= 2 else max(2, (len(query_tokens) + 1) // 2)
-
-            if not exact_match and matched_tokens < required_matches:
-                continue
-
-            score = 1.0 if exact_match else (matched_tokens / max(1, len(query_tokens)))
-            if image_edit_intent:
-                score += self._image_edit_priority_boost(
+            intent_boost = (
+                self._image_edit_priority_boost(
                     workflow_id=entry.workflow_id,
                     name=name,
                     description=description,
                     tags=meta_tags,
                 )
+                if image_edit_intent
+                else 0.0
+            )
+
+            if not exact_match and matched_tokens < required_matches:
+                if not (image_edit_intent and intent_boost > 0):
+                    continue
+
+            score = 1.0 if exact_match else (matched_tokens / max(1, len(query_tokens)))
+            if image_edit_intent:
+                score += intent_boost
             ranked_results.append(
                 (
                     score,
@@ -813,7 +819,7 @@ class WorkflowTools:
         spec: ParamSpec,
         raw_overrides: Dict[str, Any],
     ) -> Dict[str, Any] | None:
-        if self._has_explicit_aspect_override(raw_overrides):
+        if self._has_explicit_aspect_override(spec, raw_overrides):
             return None
 
         aspect_param_name = self._find_param_name(spec, "aspect_ratio")
@@ -866,11 +872,59 @@ class WorkflowTools:
                 return item.name
         return None
 
-    @staticmethod
-    def _has_explicit_aspect_override(raw_overrides: Dict[str, Any]) -> bool:
+    def _has_explicit_aspect_override(self, spec: ParamSpec, raw_overrides: Dict[str, Any]) -> bool:
+        param_map = spec.param_map()
         for key in ("aspect_ratio", "custom_ratio", "custom_aspect_ratio"):
-            if key in raw_overrides:
+            if key not in raw_overrides:
+                continue
+            value = raw_overrides.get(key)
+            default = param_map.get(key).default if key in param_map else None
+
+            if key == "custom_ratio":
+                if isinstance(value, bool):
+                    if value is True:
+                        return True
+                    if default not in (False, None):
+                        return True
+                    continue
+                if isinstance(value, str):
+                    lowered = value.strip().lower()
+                    if lowered in {"", "false", "0", "no", "off"} and default in (False, None):
+                        continue
+                    if lowered in {"true", "1", "yes", "on"}:
+                        return True
+                if value != default:
+                    return True
+                continue
+
+            if key == "custom_aspect_ratio":
+                value_norm = self._normalize_ratio_token(str(value)) if value is not None else None
+                default_norm = self._normalize_ratio_token(str(default)) if default is not None else None
+                if value_norm and default_norm and value_norm == default_norm:
+                    continue
+                if value == default:
+                    continue
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
                 return True
+
+            # aspect_ratio
+            if isinstance(value, str):
+                value_clean = value.strip()
+                if not value_clean:
+                    continue
+            else:
+                value_clean = str(value)
+            if value == default:
+                continue
+            if isinstance(default, str):
+                value_norm = self._normalize_ratio_token(value_clean)
+                default_norm = self._normalize_ratio_token(default)
+                if value_norm and default_norm and value_norm == default_norm:
+                    continue
+            return True
         return False
 
     @staticmethod
