@@ -82,10 +82,23 @@ async def _http_probe(url: str, timeout_s: float = 2.0) -> _CheckResult:
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             response = await client.get(url)
+            detail = f"HTTP {response.status_code}"
+            if response.status_code < 500:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    version = payload.get("service_version")
+                    commit = payload.get("git_commit")
+                    if isinstance(version, str) and version:
+                        detail += f", version={version}"
+                    if isinstance(commit, str) and commit:
+                        detail += f", commit={commit}"
             return _CheckResult(
                 ok=response.status_code < 500,
                 name=url,
-                detail=f"HTTP {response.status_code}",
+                detail=detail,
             )
     except Exception as exc:
         return _CheckResult(ok=False, name=url, detail=str(exc))
@@ -137,20 +150,28 @@ async def _doctor(config_path: str) -> int:
 
         tool_names = {spec.name for spec in tool_specs}
         if "comfy_queue_get" in tool_names:
-            result = await router.call_tool("comfy_queue_get", {})
-            error = _tool_error_text(result)
-            if error:
-                checks.append(_CheckResult(ok=False, name="tool.comfy_queue_get", detail=error))
-            else:
-                checks.append(_CheckResult(ok=True, name="tool.comfy_queue_get", detail="ok"))
+            try:
+                result = await router.call_tool("comfy_queue_get", {})
+                error = _tool_error_text(result)
+                if error:
+                    checks.append(_CheckResult(ok=False, name="tool.comfy_queue_get", detail=error))
+                else:
+                    checks.append(_CheckResult(ok=True, name="tool.comfy_queue_get", detail="ok"))
+            except Exception as exc:
+                checks.append(_CheckResult(ok=False, name="tool.comfy_queue_get", detail=str(exc)))
 
         if "photarium_list" in tool_names:
-            result = await router.call_tool("photarium_list", {"limit": 1})
-            error = _tool_error_text(result)
-            if error:
-                checks.append(_CheckResult(ok=False, name="tool.photarium_list", detail=error))
-            else:
-                checks.append(_CheckResult(ok=True, name="tool.photarium_list", detail="ok"))
+            try:
+                # Force all namespaces for diagnostics so namespace defaults don't
+                # mask simple connectivity/tool issues.
+                result = await router.call_tool("photarium_list", {"limit": 1, "namespace": "__all__"})
+                error = _tool_error_text(result)
+                if error:
+                    checks.append(_CheckResult(ok=False, name="tool.photarium_list", detail=error))
+                else:
+                    checks.append(_CheckResult(ok=True, name="tool.photarium_list", detail="ok"))
+            except Exception as exc:
+                checks.append(_CheckResult(ok=False, name="tool.photarium_list", detail=str(exc)))
     except Exception as exc:
         checks.append(_CheckResult(ok=False, name="mcp.connect", detail=str(exc)))
     finally:

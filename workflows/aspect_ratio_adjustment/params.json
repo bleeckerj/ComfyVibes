@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "workflow_id": "aspect_ratio_adjustment",
-  "workflow_hash": "25c94791642d34bf51b027cdc7dc2007a2fb7b78e9666223b0658a6bb73d1030",
+  "workflow_hash": "c08cd520c7103573dc21bb41ae0e5b831cdd1508d286fc6c6c2fc46f28ae94c9",
   "params": [
     {
       "name": "seed",
@@ -41,8 +41,8 @@
     },
     {
       "name": "denoise",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "KSampler.denoise",
       "target": {

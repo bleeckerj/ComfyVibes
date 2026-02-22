@@ -7,11 +7,13 @@
     "temperature": 0.2,
     "timeout_s": 180
   },
-  "system_prompt": "You are a terminal chat orchestrator. Decide when to call MCP tools, then summarize results for the user.",
+  "system_prompt": "You are a terminal chat orchestrator. Decide when to call MCP tools, then summarize results for the user.\n\nYou can also use Backoffice tools (backoffice_*), including design-fiction artifact search.",
   "strict_tool_facts": true,
   "tool_description_hints": {
     "photarium_search": "Use this for semantic and keyword image search in the Photarium catalog, including concept/color/style lookups.",
-    "photarium_*": "Photarium tools operate on the Photarium catalog and image metadata."
+    "photarium_*": "Photarium tools operate on the Photarium catalog and image metadata.",
+    "backoffice_design_artifacts_search": "Use this to search design-fiction artifacts in the Backoffice collections.",
+    "backoffice_*": "Backoffice tools operate on content collections such as design_fiction_artifacts."
   },
   "servers": [
     {
@@ -43,6 +45,23 @@
       "env": {
         "PHOTARIUM_BASE_URL": "http://127.0.0.1:3000"
       }
+    },
+    {
+      "name": "editorial",
+      "transport": "http",
+      "http_url": "http://127.0.0.1:8788",
+      "tool_prefixes": [
+        "editorial_",
+        "adjacency_"
+      ]
+    },
+    {
+      "name": "backoffice",
+      "transport": "http",
+      "http_url": "http://127.0.0.1:8766",
+      "tool_prefixes": [
+        "backoffice_"
+      ]
     }
   ]
 }

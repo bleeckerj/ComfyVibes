@@ -1,0 +1,72 @@
+{
+  "id": "image_variation_maker",
+  "name": "Image Variation Maker with Image Analysis Instructions",
+  "description": "Img2img variation workflow that uses image analysis instructions to guide the input image using a vision model. The user supplies image_analysis_instructions to steer the caption; the caption becomes the positive prompt. denoise controls similarity (0 preserves, 1 regenerates).",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "variations",
+    "auto-caption",
+    "vision",
+    "wan",
+    "lora",
+    "promptless"
+  ],
+  "use_cases": [
+    "Create variations of an existing image without writing a positive prompt.",
+    "Steer the auto-captioner with image_analysis_instructions (e.g., focus on materials, color, photography style, lensing). The image_analysis_instructions can be as simple or complex as desired, e.g. 'Describe the materials, colors, and photography style of the input image. Use that caption to create a variation with the same materials and style but a different composition.'"
+  ],
+  "strengths": [
+    "Works from a single input image with no explicit positive prompt required.",
+    "Caption-guided variations keep semantic alignment to the input."
+  ],
+  "tradeoffs": [
+    "Caption quality determines the edit direction.",
+    "High denoise values can drift from the source image."
+  ],
+  "style": [],
+  "mood": [],
+  "notes": "User-facing image_analysis_instructions maps to the Griptape STRING input; its output becomes the positive prompt. negative_prompt and denoise are optional overrides with defaults in the workflow.",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "image_analysis_instructions",
+      "negative_prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "negative_prompt",
+      "sampler_name",
+      "scheduler",
+      "add_lora",
+      "clip_name",
+      "device",
+      "filename_prefix",
+      "image",
+      "input_type",
+      "lora_1_lora",
+      "lora_1_on",
+      "lora_1_strength",
+      "nag_alpha",
+      "nag_scale",
+      "nag_tau",
+      "power_lora_loader_header_widget_type",
+      "shift",
+      "string",
+      "type",
+      "unet_name",
+      "vae_name"
+    ]
+  }
+}

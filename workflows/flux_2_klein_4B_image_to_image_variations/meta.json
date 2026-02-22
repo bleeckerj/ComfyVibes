@@ -1,0 +1,57 @@
+{
+  "id": "flux_2_klein_4B_image_to_image_variations",
+  "name": "Flux 2 Klein 4B Image-To-Image Variations",
+  "description": "Create image-to-image variations by initializing the sampler latent from the input image (denoise=0 preserves, denoise=1 regenerates).",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "variations",
+    "sampler",
+    "flux",
+    "latent-init"
+  ],
+  "use_cases": [
+    "Create subtle variations of an image with low denoise values.",
+    "Apply controlled restyles while preserving the original composition."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "device",
+      "filename_prefix",
+      "image",
+      "megapixels",
+      "resolution_steps",
+      "type",
+      "unet_name",
+      "upscale_method",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

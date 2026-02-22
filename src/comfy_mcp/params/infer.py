@@ -47,6 +47,12 @@ def infer_params_spec(workflow_id: str, workflow_json: Dict[str, Any]) -> Dict[s
                     continue
 
                 base_name = _base_param_name(input_name, class_type, title, leaf_path)
+                # Some ComfyUI numeric fields are semantically floats even when authored
+                # as integers in a workflow JSON (e.g. denoise=1). Treat them as floats
+                # to avoid downstream clients/schema treating them as ints.
+                if base_name == "denoise" and inferred == "int":
+                    inferred = "float"
+                    leaf_value = float(leaf_value)
                 unique_name = _unique_name(base_name, name_counts)
                 description = _description(title, input_name, leaf_path)
                 target: Dict[str, Any] = {
@@ -213,4 +219,3 @@ def _param_sort_key(item: Dict[str, Any]) -> Tuple[int, str]:
     if isinstance(target, dict):
         input_name = str(target.get("input") or "")
     return (-_PRIORITY_FIELDS.get(input_name, 0), str(item.get("name") or ""))
-

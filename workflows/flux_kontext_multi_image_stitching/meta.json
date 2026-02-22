@@ -1,0 +1,74 @@
+{
+  "id": "flux_kontext_multi_image_stitching",
+  "name": "Flux Kontext Multi-Image Stitching",
+  "description": "Stitch two reference images into a single combined reference and run Flux Kontext via ReferenceLatent to generate a unified, cohesive result.",
+  "tags": [
+    "flux",
+    "kontext",
+    "multi-image",
+    "image-stitch",
+    "reference-latent",
+    "image-edit",
+    "img2img"
+  ],
+  "use_cases": [
+    "Stitch two reference images into a single combined reference canvas.",
+    "Generate a unified, cohesive result guided by the stitched reference and prompt."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image_1",
+      "input_image_2",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "height_2",
+      "width",
+      "width_2",
+      "batch_size",
+      "prompt",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name1",
+      "clip_name2",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "direction",
+      "divisible_by",
+      "filename_prefix",
+      "guidance",
+      "image",
+      "image_2",
+      "keep_proportion",
+      "keep_proportion_2",
+      "match_image_size",
+      "megapixel",
+      "spacing_color",
+      "spacing_width",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

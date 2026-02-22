@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "workflow_id": "aspect_comfyui_01077",
-  "workflow_hash": "4439c89a50fee0ae305dafdade840fab89e2c08a0f7978a578b132ce8af267c4",
+  "workflow_hash": "664c571d9cf606452be0000c27fdb076630d52e80364c18ed5b28f6f58127ad9",
   "params": [
     {
       "name": "seed",
@@ -41,8 +41,8 @@
     },
     {
       "name": "denoise",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "KSampler.denoise",
       "target": {

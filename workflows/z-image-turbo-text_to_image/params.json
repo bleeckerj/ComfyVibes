@@ -1,0 +1,223 @@
+{
+  "schema_version": "1",
+  "workflow_id": "z-image-turbo-text_to_image",
+  "workflow_hash": "093c47784c3332fbdfcf3c8d8279d787e738bc25e9fa143165e6a8b1da1cc417",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 642689619278419,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 5,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "height",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.height",
+      "target": {
+        "mode": "direct",
+        "node_id": "162",
+        "input": "height"
+      }
+    },
+    {
+      "name": "width",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.width",
+      "target": {
+        "mode": "direct",
+        "node_id": "162",
+        "input": "width"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "EmptySD3LatentImage.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "162",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "portrait photo of an orange robot, extreme closeup, staring directly at the viewer with intense glowing red eyes set deep in narrow housings, chipped orange plating revealing brushed metal and micro-scratches that catch sharp rim light, subtle grime collected in every seam, braided cables and fine hydraulic lines framing the lower face, dramatic dark background falling into near-black with only faint atmospheric haze outlining the silhouette, powerful cinematic lighting carving bold highlights across the curved armor while deep shadows pool beneath each panel, a subtle ember-like reflection flickering in the eyes adding tension, shallow depth of field isolating the face for maximum impact, gentle film grain enhancing the metallic textures, Nikon D850 with a 50mm f/1.4 lens",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "6",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "dpmpp_sde",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "beta",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "clip_name",
+      "type": "string",
+      "default": "qwen_3_4b.safetensors",
+      "required": false,
+      "description": "Load CLIP.clip_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "189",
+        "input": "clip_name"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load CLIP.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "189",
+        "input": "device"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "img",
+      "required": false,
+      "description": "Save Image Original.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "171",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "shift",
+      "type": "int",
+      "default": 3,
+      "required": false,
+      "description": "ModelSamplingAuraFlow.shift",
+      "target": {
+        "mode": "direct",
+        "node_id": "191",
+        "input": "shift"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "lumina2",
+      "required": false,
+      "description": "Load CLIP.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "189",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "z_image_turbo_bf16.safetensors",
+      "required": false,
+      "description": "Load Diffusion Model.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "188",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "ae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "27",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load Diffusion Model.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "188",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

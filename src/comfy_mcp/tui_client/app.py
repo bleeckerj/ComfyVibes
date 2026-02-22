@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import argparse
 import json
+import os
 import platform
 import re
 import subprocess
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal
 
 from textual.app import App, ComposeResult
+from textual import events
+from textual.driver import Driver
 from textual.widgets import Footer, Header, RichLog, TextArea
 
 from comfy_mcp.tui_client.config import DEFAULT_SYSTEM_PROMPT, ChatClientConfig, load_config
@@ -22,6 +25,11 @@ from comfy_mcp.tui_client.orchestrator import ChatOrchestrator
 from comfy_mcp.tui_client.mcp_router import MCPToolRouter
 from comfy_mcp.tui_client.http_router import HTTPToolRouter
 from comfy_mcp.tui_client.sanitize import sanitize_result
+
+try:
+    from textual.drivers.linux_driver import LinuxDriver as _TextualLinuxDriver
+except Exception:  # pragma: no cover - platform/import dependent
+    _TextualLinuxDriver = None
 
 
 class HistoryTextArea(TextArea):
@@ -53,6 +61,59 @@ class HistoryTextArea(TextArea):
             return
         super().action_cursor_down()
 
+    async def _on_key(self, event: events.Key) -> None:
+        logger = getattr(self.app, "_key_debug_write", None)
+        if callable(logger):
+            logger(
+                "input_key",
+                key=event.key,
+                name=event.name,
+                character=event.character,
+                is_printable=bool(getattr(event, "is_printable", False)),
+                is_repeat=getattr(event, "is_repeat", None),
+            )
+        await super()._on_key(event)
+
+    def on_focus(self, event: events.Focus) -> None:
+        logger = getattr(self.app, "_key_debug_write", None)
+        if callable(logger):
+            logger("input_focus")
+
+    def on_blur(self, event: events.Blur) -> None:
+        logger = getattr(self.app, "_key_debug_write", None)
+        if callable(logger):
+            logger("input_blur")
+
+
+class PassiveRichLog(RichLog):
+    """Log pane that won't steal keyboard focus from the input composer."""
+
+    can_focus = False
+
+
+def _should_disable_kitty_keyboard_protocol() -> bool:
+    """Work around iTerm2 + Textual keyboard repeat issues by skipping kitty keyboard mode."""
+    if os.environ.get("EDGAR_TUI_DISABLE_KITTY_KEYBOARD", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    if os.environ.get("EDGAR_TUI_FORCE_KITTY_KEYBOARD", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+    term_program = os.environ.get("TERM_PROGRAM", "")
+    return term_program == "iTerm.app"
+
+
+if _TextualLinuxDriver is not None:
+    class _EDGARLinuxDriver(_TextualLinuxDriver):
+        """LinuxDriver wrapper that can suppress kitty keyboard protocol negotiation."""
+
+        def write(self, data: str) -> None:
+            if _should_disable_kitty_keyboard_protocol() and data:
+                data = data.replace("\x1b[>1u", "").replace("\x1b[<u", "")
+                if not data:
+                    return
+            super().write(data)
+else:  # pragma: no cover - fallback on unsupported platforms
+    _EDGARLinuxDriver = None
+
 
 def _clipboard_copy(text: str) -> bool:
     """Copy text to system clipboard. Returns True on success."""
@@ -76,6 +137,112 @@ def _clipboard_copy(text: str) -> bool:
         return False
 
 
+def _strip_border_glyphs(text: str) -> str:
+    """Strip common Textual border glyphs from copied text lines."""
+    cleaned_lines: List[str] = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"^\s*[│┃║]\s?", "", raw_line.rstrip())
+        line = re.sub(r"\s*[▁▂▃▄▅▆▇█]?\s*[│┃║]\s*[▁▂▃▄▅▆▇█]?$", "", line)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+
+def _format_editorial_ads_inventory_lines(result: Any) -> List[str] | None:
+    """Return deterministic ad inventory lines from editorial_ads_list_inventory output."""
+    if not isinstance(result, dict):
+        return None
+
+    items = result.get("items")
+    if not isinstance(items, list):
+        return None
+
+    inventory_path = result.get("inventoryPath")
+    total = result.get("total")
+    matched = result.get("matched")
+    returned = result.get("returned")
+
+    lines: List[str] = []
+    header = "Editorial ad inventory (authoritative tool output)"
+    if isinstance(inventory_path, str) and inventory_path:
+        header += f" from {inventory_path}"
+    lines.append(header)
+
+    stat_parts: List[str] = []
+    if isinstance(total, int):
+        stat_parts.append(f"total={total}")
+    if isinstance(matched, int):
+        stat_parts.append(f"matched={matched}")
+    if isinstance(returned, int):
+        stat_parts.append(f"returned={returned}")
+    if stat_parts:
+        lines.append(", ".join(stat_parts))
+
+    for index, raw_item in enumerate(items, start=1):
+        if not isinstance(raw_item, dict):
+            continue
+        ad_id = str(raw_item.get("id") or "<missing-id>")
+        slot = str(raw_item.get("slot") or "unknown-slot")
+        title = raw_item.get("title")
+        sponsor = raw_item.get("sponsor")
+        visibility = raw_item.get("visibility")
+
+        line = f"{index}. `{ad_id}` — {slot}"
+        if isinstance(title, str) and title.strip():
+            line += f" — \"{title.strip()}\""
+        if isinstance(sponsor, str) and sponsor.strip():
+            line += f" — sponsor: {sponsor.strip()}"
+        if isinstance(visibility, str) and visibility.strip():
+            line += f" — visibility: {visibility.strip()}"
+        lines.append(line)
+
+    return lines
+
+
+def _format_editorial_ads_preview_lines(result: Any) -> List[str] | None:
+    """Return deterministic preview lines from editorial_ads_preview output."""
+    if not isinstance(result, dict):
+        return None
+
+    mode = result.get("mode")
+    preview_url = result.get("previewUrl")
+    preview_urls = result.get("previewUrls")
+    selected_ids = result.get("selectedIds")
+    missing_ids = result.get("missingRequestedIds")
+    fit = result.get("fit")
+    actual_aspect = result.get("actualAspect")
+
+    lines: List[str] = []
+    lines.append(f"Editorial ad preview (mode={mode if isinstance(mode, str) else 'catalog'})")
+    if isinstance(preview_url, str) and preview_url.strip():
+        lines.append(f"Preview URL: {preview_url.strip()}")
+
+    if isinstance(preview_urls, dict):
+        catalog = preview_urls.get("catalog")
+        single = preview_urls.get("single")
+        if isinstance(catalog, str) and catalog.strip():
+            lines.append(f"Catalog URL: {catalog.strip()}")
+        if isinstance(single, str) and single.strip():
+            lines.append(f"Primary single URL: {single.strip()}")
+
+    if isinstance(fit, str):
+        lines.append(f"fit={fit}")
+    if isinstance(actual_aspect, bool):
+        lines.append(f"actualAspect={str(actual_aspect).lower()}")
+
+    if isinstance(selected_ids, list) and selected_ids:
+        lines.append("Selected ads:")
+        for index, ad_id in enumerate(selected_ids, start=1):
+            if isinstance(ad_id, str):
+                lines.append(f"{index}. `{ad_id}`")
+
+    if isinstance(missing_ids, list) and missing_ids:
+        missing = [ad_id for ad_id in missing_ids if isinstance(ad_id, str) and ad_id.strip()]
+        if missing:
+            lines.append(f"Missing requested IDs: {', '.join(missing)}")
+
+    return lines
+
+
 def _build_router(config: ChatClientConfig):
     """Pick HTTP or stdio router based on server config."""
     http_servers = [s for s in config.servers if s.transport == "http" or s.http_url]
@@ -88,6 +255,45 @@ def _build_router(config: ChatClientConfig):
 
 
 class ChatApp(App):
+    _DEFAULT_INPUT_HEIGHT = 6
+    _MIN_INPUT_HEIGHT = 4
+    _MAX_INPUT_HEIGHT = 18
+    _LOG_MAX_LINES = 2000
+    _UI_PREFS_FILENAME = ".mcp_chat_ui_prefs.json"
+    _PROMPT_HISTORY_MAX = 50
+    _NUMBER_WORDS: Dict[str, int] = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+    }
+
+    _EDGAR_ASCII: tuple[str, ...] = (
+        r" _____ ____   ____    _    ____  ",
+        r"| ____|  _ \ / ___|  / \  |  _ \ ",
+        r"|  _| | | | | |  _  / _ \ | |_) |",
+        r"| |___| |_| | |_| |/ ___ \|  _ < ",
+        r"|_____|____/ \____/_/   \_\_| \_\\",
+    )
+    _NFL_ASCII: tuple[str, ...] = (
+        "▖ ▖        ▄▖  ▗       ",
+        "▛▖▌█▌▀▌▛▘  ▙▖▌▌▜▘▌▌▛▘█▌",
+        "▌▝▌▙▖█▌▌   ▌ ▙▌▐▖▙▌▌ ▙▖",
+        "                       ",
+        "▖   ▌       ▗          ",
+        "▌ ▀▌▛▌▛▌▛▘▀▌▜▘▛▌▛▘▌▌   ",
+        "▙▖█▌▙▌▙▌▌ █▌▐▖▙▌▌ ▙▌   ",
+        "                  ▄▌   ",
+    )
+
     CSS = """
     Screen {
         layout: vertical;
@@ -132,18 +338,37 @@ class ChatApp(App):
         ("ctrl+c", "quit", "Quit"),
         ("f10", "quit", "Quit"),
         ("escape", "quit", "Quit"),
+        ("tab", "toggle_pane", "Toggle Pane"),
+        ("shift+tab", "toggle_pane", "Toggle Pane"),
         ("f1", "focus_chat", "Chat"),
         ("f2", "focus_tools", "Tools"),
         ("alt+up", "pane_scroll_up", "Scroll Up"),
         ("alt+down", "pane_scroll_down", "Scroll Down"),
+        ("alt+shift+up", "pane_page_up", "Page Up"),
+        ("alt+shift+down", "pane_page_down", "Page Down"),
         ("alt+pageup", "pane_page_up", "Page Up"),
         ("alt+pagedown", "pane_page_down", "Page Down"),
+        ("super+up", "pane_home", "Top"),
+        ("super+down", "pane_end", "Bottom"),
         ("alt+home", "pane_home", "Top"),
         ("alt+end", "pane_end", "Bottom"),
+        ("alt+left", "input_word_left", "Word Left"),
+        ("alt+right", "input_word_right", "Word Right"),
+        ("alt+b", "input_word_left", "Word Left"),
+        ("alt+f", "input_word_right", "Word Right"),
+        ("alt+backspace", "input_delete_word_left", "Del Word Left"),
+        ("alt+d", "input_delete_word_right", "Del Word Right"),
+        ("ctrl+shift+up", "input_height_increase", "Input +"),
+        ("ctrl+shift+down", "input_height_decrease", "Input -"),
+        ("ctrl+alt+up", "input_height_increase", "Input +"),
+        ("ctrl+alt+down", "input_height_decrease", "Input -"),
         ("f6", "copy_chat", "Copy Chat"),
         ("f7", "copy_tools", "Copy Tools"),
         ("f8", "copy_all", "Copy All"),
         ("f9", "export_transcript", "Export"),
+        ("f5", "submit_prompt", "Send"),
+        ("ctrl+s", "submit_prompt", "Send"),
+        ("f12", "toggle_key_debug", "Key Debug"),
         ("ctrl+enter", "submit_prompt", "Send"),
     ]
 
@@ -169,17 +394,47 @@ class ChatApp(App):
         self._session_log_path: Path | None = None
         self._workflow_progress_active_calls: int = 0
         self._workflow_progress_monitor_generation: int = 0
+        self._ui_prefs_path = Path.cwd() / self._UI_PREFS_FILENAME
+        self._input_height_lines: int = self._DEFAULT_INPUT_HEIGHT
+        self._key_debug_enabled = os.environ.get("EDGAR_TUI_KEY_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+        self._key_debug_log_path = Path.cwd() / ".mcp_chat_logs" / "edgar_key_debug.jsonl"
+        self._load_ui_preferences()
+
+    def get_driver_class(self) -> type[Driver]:
+        driver_class = super().get_driver_class()
+        if _EDGARLinuxDriver is None:
+            return driver_class
+        if driver_class is _TextualLinuxDriver and _should_disable_kitty_keyboard_protocol():
+            return _EDGARLinuxDriver
+        return driver_class
+
+    def on_key(self, event: events.Key) -> None:
+        if not self._key_debug_enabled:
+            return
+        focused = getattr(self, "focused", None)
+        focused_id = getattr(focused, "id", None)
+        focused_type = focused.__class__.__name__ if focused is not None else None
+        self._key_debug_write(
+            "key",
+            key=event.key,
+            name=event.name,
+            character=event.character,
+            is_printable=bool(getattr(event, "is_printable", False)),
+            is_repeat=getattr(event, "is_repeat", None),
+            focused_id=focused_id,
+            focused_type=focused_type,
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield RichLog(id="chat_log", wrap=True, markup=True)
-        yield RichLog(id="tool_log", wrap=True, markup=True)
+        yield PassiveRichLog(id="chat_log", wrap=True, markup=True, max_lines=self._LOG_MAX_LINES)
+        yield PassiveRichLog(id="tool_log", wrap=True, markup=True, max_lines=self._LOG_MAX_LINES)
         yield HistoryTextArea(
             "",
             id="input",
             soft_wrap=True,
             show_line_numbers=False,
-            placeholder="Ask for a workflow, search, or tool call... (Ctrl+Enter to send)",
+            placeholder="Ask for a workflow, search, or tool call... (F5/Ctrl+S send; Ctrl+Enter when supported, Opt+←/→ words, Ctrl+Shift+↑/↓ resize)",
             on_history_prev=self._history_prev,
             on_history_next=self._history_next,
         )
@@ -188,17 +443,56 @@ class ChatApp(App):
     async def on_mount(self) -> None:
         self._init_session_log()
         self._set_active_pane("chat")
+        self._set_input_height(self._input_height_lines, announce=False, persist=False)
         self.query_one("#input", TextArea).focus()
+        if self._key_debug_enabled:
+            self._key_debug_write("mount")
+            self.notify(f"Key debug ON: {self._key_debug_log_path}")
         # Connect in the app task so teardown happens in the same task context.
         await self._startup()
 
+    def key_ctrl_q(self) -> None:
+        """Hard quit fallback if a focused widget swallows bindings."""
+        self.exit()
+
+    def key_ctrl_c(self) -> None:
+        """Hard quit fallback if a focused widget swallows bindings."""
+        self.exit()
+
+    def key_f10(self) -> None:
+        self.exit()
+
+    def action_toggle_key_debug(self) -> None:
+        self._key_debug_enabled = not self._key_debug_enabled
+        state = "ON" if self._key_debug_enabled else "OFF"
+        self._key_debug_write("toggle", enabled=self._key_debug_enabled)
+        self.notify(f"Key debug {state}")
+
+    def _key_debug_write(self, kind: str, **payload: Any) -> None:
+        if not self._key_debug_enabled:
+            return
+        try:
+            self._key_debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "ts": datetime.now().isoformat(timespec="milliseconds"),
+                "kind": kind,
+                **payload,
+            }
+            with self._key_debug_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+        except Exception:
+            # Debug logging must never impact input handling.
+            return
+
     async def _startup(self) -> None:
+        self._render_startup_banner()
         self._write_chat("[bold]Connecting to MCP servers...[/bold]", "Connecting to MCP servers...")
         try:
             await self._router.connect()
         except Exception as exc:
             self._write_chat(f"[red]Failed to connect: {exc}[/red]", f"Failed to connect: {exc}")
             return
+        await self._render_connected_servers()
 
         self._tools = [self._to_openai_tool(spec) for spec in self._router.list_tool_specs()]
         self._available_tool_names = {
@@ -212,6 +506,65 @@ class ChatApp(App):
             self._write_tools(f"- {tool['function']['name']}", f"- {tool['function']['name']}")
         self._is_ready = True
         self._write_chat("[green]Ready. Type a request below.[/green]", "Ready. Type a request below.")
+        self._write_chat(
+            "[dim]Tip: Opt+Left/Right moves by word. Ctrl+Shift+Up/Down resizes the input box.[/dim]",
+            "Tip: Opt+Left/Right moves by word. Ctrl+Shift+Up/Down resizes the input box.",
+        )
+
+    async def _render_connected_servers(self) -> None:
+        health_fetcher = getattr(self._router, "get_server_health_statuses", None)
+        if not callable(health_fetcher):
+            return
+        try:
+            statuses = await health_fetcher()
+        except Exception as exc:
+            self._write_chat(
+                f"[yellow]Connected, but failed to read server health details: {exc}[/yellow]",
+                f"Connected, but failed to read server health details: {exc}",
+            )
+            return
+        if not isinstance(statuses, list) or not statuses:
+            return
+
+        self._write_chat("[bold]Connected servers:[/bold]", "Connected servers:")
+        for status in statuses:
+            if not isinstance(status, dict):
+                continue
+            name = str(status.get("name") or "unknown")
+            base_url = str(status.get("base_url") or "")
+            ok = bool(status.get("ok"))
+            payload = status.get("payload")
+            payload_dict = payload if isinstance(payload, dict) else {}
+            runtime_status = str(payload_dict.get("status") or ("ok" if ok else "unknown"))
+            version = payload_dict.get("service_version")
+            commit = payload_dict.get("git_commit")
+            branch = payload_dict.get("git_branch")
+            dirty = payload_dict.get("git_dirty")
+            detail_parts: list[str] = [f"status={runtime_status}"]
+            if isinstance(version, str) and version:
+                detail_parts.append(f"version={version}")
+            if isinstance(commit, str) and commit:
+                detail_parts.append(f"commit={commit}")
+            if isinstance(branch, str) and branch:
+                detail_parts.append(f"branch={branch}")
+            if isinstance(dirty, bool):
+                detail_parts.append(f"dirty={'yes' if dirty else 'no'}")
+            details = ", ".join(detail_parts)
+            plain = f"- {name} ({base_url}) {details}"
+            self._write_chat(f"[dim]{plain}[/dim]", plain)
+
+    def _render_startup_banner(self) -> None:
+        for line in self._EDGAR_ASCII:
+            self._write_chat(f"[bold green]{line}[/bold green]", line)
+        self._write_chat(
+            "[bold bright_green]Everyday Digital Graphics Assistant Robot[/bold bright_green]",
+            "Everyday Digital Graphics Assistant Robot",
+        )
+        self._write_chat("", "")
+        self._write_chat("[bold blink bright_blue]Near Future Laboratory[/bold blink bright_blue]", "Near Future Laboratory")
+        for line in self._NFL_ASCII:
+            self._write_chat(f"[bold blink bright_blue]{line}[/bold blink bright_blue]", line)
+        self._write_chat("", "")
 
     def action_submit_prompt(self) -> None:
         input_widget = self.query_one("#input", TextArea)
@@ -251,7 +604,7 @@ class ChatApp(App):
         if command_name == "/status":
             self._show_status()
             return True
-        if command_name in {"/aspect", "/ar"}:
+        if command_name in {"/aspect", "/ar", "/aspectratio"}:
             self._run_aspect_flow(user_text)
             return True
         if command_name in {"/importwf", "/importworkflow"}:
@@ -275,8 +628,8 @@ class ChatApp(App):
             "- /moodboard <brief> run an agentic mood-board flow",
         )
         self._write_chat(
-            "- [cyan]/aspect <image_id> targets=...[/cyan] (alias: [cyan]/ar[/cyan]) run nearest-neighbor aspect-ratio flow",
-            "- /aspect <image_id> targets=... (alias: /ar) run nearest-neighbor aspect-ratio flow",
+            "- [cyan]/aspect <image_id> targets=...[/cyan] (aliases: [cyan]/ar[/cyan], [cyan]/aspectratio[/cyan]) run source-anchored aspect-ratio flow",
+            "- /aspect <image_id> targets=... (aliases: /ar, /aspectratio) run source-anchored aspect-ratio flow",
         )
         self._write_chat(
             "- [cyan]/importwf <image_id> [id=workflow_id][/cyan] (alias: [cyan]/importworkflow[/cyan]) import embedded Photarium workflow into catalog",
@@ -286,8 +639,34 @@ class ChatApp(App):
             "- [cyan]/tanktracks <image_id>[/cyan] run the add-tank-tracks variant flow",
             "- /tanktracks <image_id> run the add-tank-tracks variant flow",
         )
+        self._write_chat("[bold]Keyboard shortcuts:[/bold]", "Keyboard shortcuts:")
+        self._write_chat("- [cyan]F1 / F2[/cyan] focus Chat / Tools pane", "- F1 / F2 focus Chat / Tools pane")
+        self._write_chat(
+            "- [cyan]Alt+Up / Alt+Down[/cyan] scroll active pane",
+            "- Alt+Up / Alt+Down scroll active pane",
+        )
+        self._write_chat(
+            "- [cyan]Alt+Shift+Up / Alt+Shift+Down[/cyan] page active pane",
+            "- Alt+Shift+Up / Alt+Shift+Down page active pane",
+        )
+        self._write_chat(
+            "- [cyan]Cmd+Up / Cmd+Down[/cyan] jump to top / bottom of active pane",
+            "- Cmd+Up / Cmd+Down jump to top / bottom of active pane",
+        )
+        self._write_chat("- [cyan]Opt+Left / Opt+Right[/cyan] move cursor by word", "- Opt+Left / Opt+Right move cursor by word")
+        self._write_chat(
+            "- [cyan]Opt+Backspace / Opt+D[/cyan] delete previous / next word",
+            "- Opt+Backspace / Opt+D delete previous / next word",
+        )
+        self._write_chat(
+            "- [cyan]Ctrl+Shift+Up / Ctrl+Shift+Down[/cyan] increase/decrease input height",
+            "- Ctrl+Shift+Up / Ctrl+Shift+Down increase/decrease input height",
+        )
+        self._write_chat("- [cyan]F5 / Ctrl+S[/cyan] send message", "- F5 / Ctrl+S send message")
+        self._write_chat("- [cyan]Ctrl+Enter[/cyan] send message (when terminal supports it)", "- Ctrl+Enter send message (when terminal supports it)")
+        self._write_chat("- [cyan]F6 / F7 / F8[/cyan] copy Chat / Tools / All", "- F6 / F7 / F8 copy Chat / Tools / All")
         self._write_chat("[dim]History: Up/Down in input recalls prior prompts.[/dim]", "History: Up/Down in input recalls prior prompts.")
-        self._write_chat("[dim]Composer: Enter newline, Ctrl+Enter send.[/dim]", "Composer: Enter newline, Ctrl+Enter send.")
+        self._write_chat("[dim]Composer: Enter newline, use F5/Ctrl+S to send (Ctrl+Enter when supported).[/dim]", "Composer: Enter newline, use F5/Ctrl+S to send (Ctrl+Enter when supported).")
 
     @staticmethod
     def _extract_local_field(text: str, pattern: str) -> tuple[str | None, str]:
@@ -318,19 +697,19 @@ class ChatApp(App):
         self._write_chat("[bold]Aspect Flow Usage[/bold]", "Aspect Flow Usage")
         self._write_chat(
             (
-                "[dim]/aspect|/ar <image_id> targets=16:9,4:5,3:2,9:16 "
+                "[dim]/aspect|/ar|/aspectratio <image_id> targets=16:9,4:5,3:2,9:16 "
                 "[workflow=aspect_ratio_adjustment] [parent=<image_id>] [source=1:1] "
-                "[max_delta=0.45] [preserve=\"...\"] [negative=\"...\"][/dim]"
+                "[max_delta=0.45] [denoise=1.0] [sweep=3] [preserve=\"...\"] [negative=\"...\"][/dim]"
             ),
             (
-                "/aspect|/ar <image_id> targets=16:9,4:5,3:2,9:16 "
+                "/aspect|/ar|/aspectratio <image_id> targets=16:9,4:5,3:2,9:16 "
                 "[workflow=aspect_ratio_adjustment] [parent=<image_id>] [source=1:1] "
-                "[max_delta=0.45] [preserve=\"...\"] [negative=\"...\"]"
+                "[max_delta=0.45] [denoise=1.0] [sweep=3] [preserve=\"...\"] [negative=\"...\"]"
             ),
         )
         self._write_chat(
-            "[dim]Example: /ar 75e92a7e-2838-45a7-6f2c-32a5fde6c300 targets=16:9,4:5,3:2,9:16 source=1:1[/dim]",
-            "Example: /ar 75e92a7e-2838-45a7-6f2c-32a5fde6c300 targets=16:9,4:5,3:2,9:16 source=1:1",
+            "[dim]Example: /aspectratio 75e92a7e-2838-45a7-6f2c-32a5fde6c300 target=9:16 denoise 1 sweep three different seed values[/dim]",
+            "Example: /aspectratio 75e92a7e-2838-45a7-6f2c-32a5fde6c300 target=9:16 denoise 1 sweep three different seed values",
         )
 
     def _show_tanktracks_usage(self) -> None:
@@ -454,7 +833,7 @@ class ChatApp(App):
 
         targets_value, remainder = self._extract_local_field(
             remainder,
-            r"(?:^|\s)(?:targets|ratios)\s*=\s*([0-9xX:,_-]+)(?=\s|$)",
+            r"(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*([0-9xX:,_-]+)(?=\s|$)",
         )
         workflow_value, remainder = self._extract_local_field(
             remainder,
@@ -472,6 +851,35 @@ class ChatApp(App):
             remainder,
             r"(?:^|\s)(?:max_delta|max_step)\s*=\s*([0-9]*\.?[0-9]+)(?=\s|$)",
         )
+        denoise_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)denoise\s*=\s*([0-9]*\.?[0-9]+)(?=\s|$)",
+        )
+        if denoise_value is None:
+            denoise_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)denoise\s+([0-9]*\.?[0-9]+)(?=\s|$)",
+            )
+        seed_values_text, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:seeds?|seed_values?)\s*=\s*([0-9,\s]+)(?=\s|$)",
+        )
+        sweep_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)sweep\s*=\s*(\d{1,2})(?=\s|$)",
+        )
+        if sweep_value is None:
+            sweep_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)sweep\s+(\d{1,2})(?=\s|$)",
+            )
+        if sweep_value is None:
+            sweep_word, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)sweep\s+([A-Za-z]+)\b",
+            )
+            if sweep_word:
+                sweep_value = str(self._NUMBER_WORDS.get(sweep_word.lower(), ""))
         preserve_value, remainder = self._extract_local_field(
             remainder,
             r'(?:^|\s)(?:preserve|positive|guidance)\s*=\s*"([^"]+)"(?=\s|$)',
@@ -495,6 +903,21 @@ class ChatApp(App):
         source_id = source_id.strip()
         target_ratios = self._normalize_ratio_list(targets_value)
         source_ratio_hint = self._normalize_ratio_token(source_ratio_value or "")
+        seed_values = self._parse_seed_values(seed_values_text)
+        seed_sweep_count = 0
+        if seed_values:
+            seed_sweep_count = len(seed_values)
+        elif sweep_value:
+            try:
+                seed_sweep_count = max(0, min(24, int(sweep_value)))
+            except ValueError:
+                seed_sweep_count = 0
+        denoise_override: float | None = None
+        if denoise_value is not None:
+            try:
+                denoise_override = max(0.0, min(1.0, float(denoise_value)))
+            except ValueError:
+                denoise_override = None
 
         max_delta = 0.45
         if max_delta_value is not None:
@@ -516,6 +939,9 @@ class ChatApp(App):
             workflow_id=workflow_id,
             source_ratio_hint=source_ratio_hint,
             max_delta=max_delta,
+            denoise_override=denoise_override,
+            seed_sweep_count=seed_sweep_count,
+            seed_values=seed_values,
             preserve_guidance=preserve_value,
             negative_guidance=negative_value,
         )
@@ -696,6 +1122,9 @@ class ChatApp(App):
         workflow_id: str,
         source_ratio_hint: str | None,
         max_delta: float,
+        denoise_override: float | None,
+        seed_sweep_count: int,
+        seed_values: List[int],
         preserve_guidance: str | None,
         negative_guidance: str | None,
     ) -> str:
@@ -709,6 +1138,13 @@ class ChatApp(App):
             "Do not change subject identity or key scene elements. "
             "Avoid ghosting, duplicate limbs, warped geometry, or scene drift."
         )
+        denoise_text = f"{denoise_override:.3f}" if denoise_override is not None else "workflow default"
+        if seed_values:
+            seed_sweep_text = ", ".join(str(value) for value in seed_values)
+        elif seed_sweep_count > 0:
+            seed_sweep_text = f"{seed_sweep_count} distinct seeds (agent selects values)"
+        else:
+            seed_sweep_text = "none requested"
         return (
             "ASPECT RATIO FLOW REQUEST\n"
             "Run this as an agentic multi-step flow inside the TUI.\n\n"
@@ -718,6 +1154,8 @@ class ChatApp(App):
             f"Requested upload target image ID: {variant_of}\n"
             f"Workflow preference: {workflow_id}\n"
             f"Max safe per-step ratio delta (log-space): {max_delta:.2f}\n"
+            f"Denoise override: {denoise_text}\n"
+            f"Seed sweep request: {seed_sweep_text}\n"
             f"Positive preservation guidance: {preserve_text}\n"
             f"Negative guidance: {negative_text}\n\n"
             "Execution rules:\n"
@@ -725,17 +1163,36 @@ class ChatApp(App):
             "2. Determine true source aspect ratio from Photarium metadata width/height when available; otherwise use workflows_image_info on the downloaded file. If a hint is provided, validate it.\n"
             "3. Discover allowed aspect_ratio choices from workflow/node capabilities (FluxResolutionNode) and restrict runs to that set.\n"
             "4. Normalize all ratios to W:H. Pass exact allowed enum strings to workflow calls (for example '4:5 (Artistic Frame)'). If a requested ratio is unavailable, map to nearest allowed ratio and report substitutions.\n"
-            "5. Build a nearest-neighbor plan from the source: repeatedly pick the unreached target whose nearest reached ratio has minimum log-distance.\n"
-            "6. If a selected step exceeds max delta, insert one allowed intermediate ratio that minimizes the largest step distance (even if intermediate was not requested).\n"
-            "7. Execute each step with workflows_run_aspect_ratio_adjustment using workflow_id and the previous step output as image_path.\n"
-            "8. Include positive and negative guidance each step to preserve subject and scene integrity.\n"
-            "9. After each run, verify output_images and do sanity checks for subject retention; if drift/ghosting appears, retry with closer intermediate and stronger guidance.\n"
-            "10. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-            "11. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 10.\n"
-            "12. Upload final outputs as Photarium variants under the effective parent image ID and return a concise ratio->image_id mapping.\n"
-            "13. Include step traces (source->...->target) for each requested ratio.\n"
-            "14. Do not ask for CLI commands or scripts; complete with available MCP tools.\n"
+            "5. Treat each requested target ratio as an independent branch from the same original source image.\n"
+            "6. For each branch, if source->target exceeds max delta, insert one or more allowed intermediate ratios only within that branch.\n"
+            "7. Reuse one deterministic seed across branches when the workflow exposes seed control.\n"
+            "8. Execute each branch with workflows_run_aspect_ratio_adjustment using workflow_id and source image_path as the branch root (never use one target branch output as another target's input).\n"
+            "9. Include positive and negative guidance each step to preserve subject and scene integrity.\n"
+            "10. After each run, verify output_images and do sanity checks for subject retention; if drift/ghosting appears, retry that same branch with closer intermediate and stronger guidance.\n"
+            "11. If comfy_download_image fails for an output, call comfy_history_get for the prompt_id and retry comfy_download_image with exact filename/subfolder/type. Do not use photarium_import_url(includeData=true) -> photarium_upload_image as an image transport workaround.\n"
+            "12. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+            "13. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 12.\n"
+            "14. Upload final outputs as Photarium variants under the effective parent image ID and return a concise ratio->image_id mapping.\n"
+            "15. Include branch traces (source->...->target) for each requested ratio and confirm every branch started from the same source image.\n"
+            "16. If denoise override is provided, set denoise to that exact value for each run.\n"
+            "17. If seed sweep is requested, run one output per seed with all non-seed overrides fixed; report seed->image_id mapping.\n"
+            "18. Do not ask for CLI commands or scripts; complete with available MCP tools.\n"
         )
+
+    @staticmethod
+    def _parse_seed_values(raw: str | None) -> List[int]:
+        if not raw:
+            return []
+        values: List[int] = []
+        for chunk in raw.split(","):
+            text = chunk.strip()
+            if not text:
+                continue
+            try:
+                values.append(int(text))
+            except ValueError:
+                continue
+        return values[:24]
 
     @staticmethod
     def _build_tanktracks_flow_prompt(
@@ -805,6 +1262,9 @@ class ChatApp(App):
         if self._prompt_history and self._prompt_history[-1] == value:
             return
         self._prompt_history.append(value)
+        if len(self._prompt_history) > self._PROMPT_HISTORY_MAX:
+            self._prompt_history = self._prompt_history[-self._PROMPT_HISTORY_MAX :]
+        self._save_ui_preferences()
 
     def _reset_prompt_history_navigation(self) -> None:
         self._prompt_history_cursor = None
@@ -929,8 +1389,8 @@ class ChatApp(App):
 
                 if content:
                     self._write_chat(
-                        f"[bold green]Assistant:[/bold green] {content}",
-                        f"Assistant: {content}",
+                        f"[bold green]EDGAR:[/bold green] {content}",
+                        f"EDGAR: {content}",
                     )
                     _assistant_content_emitted = True
 
@@ -992,6 +1452,42 @@ class ChatApp(App):
                 result_text = json.dumps(display_result, indent=2)
                 self._write_tools(result_text, result_text)
 
+        editorial_inventory_events = [
+            event
+            for event in tool_events
+            if event.name == "editorial_ads_list_inventory" and not event.error
+        ]
+        if editorial_inventory_events and not self._config.strict_tool_facts:
+            self._write_chat(
+                "[bold yellow]Tool-grounded editorial inventory listing:[/bold yellow] showing only extant entries from tool output.",
+                "Tool-grounded editorial inventory listing: showing only extant entries from tool output.",
+            )
+            for event in editorial_inventory_events:
+                lines = _format_editorial_ads_inventory_lines(event.result)
+                if not lines:
+                    continue
+                for line in lines:
+                    self._write_chat(line, line)
+            return
+
+        editorial_preview_events = [
+            event
+            for event in tool_events
+            if event.name == "editorial_ads_preview" and not event.error
+        ]
+        if editorial_preview_events and not self._config.strict_tool_facts:
+            self._write_chat(
+                "[bold yellow]Tool-grounded editorial preview response:[/bold yellow] showing exact preview URLs from tool output.",
+                "Tool-grounded editorial preview response: showing exact preview URLs from tool output.",
+            )
+            for event in editorial_preview_events:
+                lines = _format_editorial_ads_preview_lines(event.result)
+                if not lines:
+                    continue
+                for line in lines:
+                    self._write_chat(line, line)
+            return
+
         if tool_events and self._config.strict_tool_facts:
             self._write_chat(
                 "[bold yellow]Tool-grounded response mode:[/bold yellow] showing exact tool outputs (no model interpretation).",
@@ -1036,8 +1532,8 @@ class ChatApp(App):
 
         if assistant_text and not _assistant_content_emitted:
             self._write_chat(
-                f"[bold green]Assistant:[/bold green] {assistant_text}",
-                f"Assistant: {assistant_text}",
+                f"[bold green]EDGAR:[/bold green] {assistant_text}",
+                f"EDGAR: {assistant_text}",
             )
             return
 
@@ -1151,15 +1647,48 @@ class ChatApp(App):
         except Exception:
             return
 
+    def _load_ui_preferences(self) -> None:
+        try:
+            payload = json.loads(self._ui_prefs_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        raw_height = payload.get("input_height_lines")
+        if isinstance(raw_height, (int, float)):
+            clamped = max(self._MIN_INPUT_HEIGHT, min(self._MAX_INPUT_HEIGHT, int(raw_height)))
+            self._input_height_lines = clamped
+        raw_prompt_history = payload.get("prompt_history")
+        if isinstance(raw_prompt_history, list):
+            normalized: List[str] = []
+            for item in raw_prompt_history:
+                if not isinstance(item, str):
+                    continue
+                text = item.strip()
+                if not text:
+                    continue
+                normalized.append(text)
+            if normalized:
+                self._prompt_history = normalized[-self._PROMPT_HISTORY_MAX :]
+
+    def _save_ui_preferences(self) -> None:
+        payload = {
+            "input_height_lines": self._input_height_lines,
+            "prompt_history": self._prompt_history[-self._PROMPT_HISTORY_MAX :],
+        }
+        try:
+            self._ui_prefs_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            return
+
     def _copy_text(self, text: str, label: str) -> None:
-        if not text.strip():
+        cleaned = _strip_border_glyphs(text)
+        if not cleaned.strip():
             self.notify(f"No {label} content to copy.", severity="warning")
             return
-        if _clipboard_copy(text):
+        if _clipboard_copy(cleaned):
             self.notify(f"Copied {label} to clipboard.")
         else:
             # Fall back to Textual's OSC 52 (works in some terminals)
-            self.copy_to_clipboard(text)
+            self.copy_to_clipboard(cleaned)
             self.notify(f"Copied {label} to clipboard (OSC 52).")
 
     def action_copy_chat(self) -> None:
@@ -1211,29 +1740,83 @@ class ChatApp(App):
 
     def action_focus_chat(self) -> None:
         self._set_active_pane("chat")
+        self._focus_input()
         self.notify("[F1] Chat  |  F2 Tools")
 
     def action_focus_tools(self) -> None:
         self._set_active_pane("tools")
+        self._focus_input()
         self.notify("F1 Chat  |  [F2] Tools")
+
+    def action_toggle_pane(self) -> None:
+        if self._active_pane == "chat":
+            self.action_focus_tools()
+        else:
+            self.action_focus_chat()
 
     def action_pane_scroll_up(self) -> None:
         self._active_log().action_scroll_up()
+        self._focus_input()
 
     def action_pane_scroll_down(self) -> None:
         self._active_log().action_scroll_down()
+        self._focus_input()
 
     def action_pane_page_up(self) -> None:
         self._active_log().action_page_up()
+        self._focus_input()
 
     def action_pane_page_down(self) -> None:
         self._active_log().action_page_down()
+        self._focus_input()
 
     def action_pane_home(self) -> None:
         self._active_log().action_scroll_home()
+        self._focus_input()
 
     def action_pane_end(self) -> None:
         self._active_log().action_scroll_end()
+        self._focus_input()
+
+    def action_input_height_increase(self) -> None:
+        self._set_input_height(self._input_height_lines + 1)
+
+    def action_input_height_decrease(self) -> None:
+        self._set_input_height(self._input_height_lines - 1)
+
+    def action_input_word_left(self) -> None:
+        self.query_one("#input", TextArea).action_cursor_word_left()
+
+    def action_input_word_right(self) -> None:
+        self.query_one("#input", TextArea).action_cursor_word_right()
+
+    def action_input_delete_word_left(self) -> None:
+        self.query_one("#input", TextArea).action_delete_word_left()
+
+    def action_input_delete_word_right(self) -> None:
+        self.query_one("#input", TextArea).action_delete_word_right()
+
+    def _set_input_height(
+        self,
+        height_lines: int,
+        *,
+        announce: bool = True,
+        persist: bool = True,
+    ) -> None:
+        clamped = max(self._MIN_INPUT_HEIGHT, min(self._MAX_INPUT_HEIGHT, int(height_lines)))
+        self._input_height_lines = clamped
+        input_widget = self.query_one("#input", TextArea)
+        input_widget.styles.height = clamped
+        if persist:
+            self._save_ui_preferences()
+        if announce:
+            self.notify(f"Input height: {clamped} lines")
+
+    def _focus_input(self) -> None:
+        try:
+            self.query_one("#input", TextArea).focus()
+        except Exception:
+            return
 
     def _to_openai_tool(self, spec) -> Dict[str, Any]:
         description = self._augment_tool_description(spec.name, spec.description)

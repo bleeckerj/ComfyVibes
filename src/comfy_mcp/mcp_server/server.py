@@ -254,6 +254,24 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
             ),
         ),
         types.Tool(
+            name="workflows_recompile",
+            description=(
+                "Apply workflow input edits and/or params overrides by workflow id, then regenerate "
+                "and persist synchronized workflow.json + meta.json + params.json artifacts."
+            ),
+            inputSchema=_tool_schema(
+                {
+                    "workflow_id": {"type": "string"},
+                    "workflow_input_updates": {"type": "array", "items": {"type": "object"}},
+                    "param_overrides": {"type": "array", "items": {"type": "object"}},
+                    "hints": {"type": "object"},
+                    "include_suggestions": {"type": "boolean"},
+                    "token": {"type": "string"},
+                },
+                ["workflow_id"],
+            ),
+        ),
+        types.Tool(
             name="workflows_package_many",
             description="Regenerate params.json and metadata capability fields for many workflows (or all when workflow_ids omitted).",
             inputSchema=_tool_schema(
@@ -346,7 +364,10 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
         ),
         types.Tool(
             name="workflows_run",
-            description="Run a workflow with parameter overrides via ComfyUI.",
+            description=(
+                "Run a workflow with parameter overrides via ComfyUI. "
+                "Requires explicit overrides object; for LoadImage.image, pass local file path or Comfy input filename."
+            ),
             inputSchema=_tool_schema(
                 {
                     "workflow_id": {"type": "string"},
@@ -417,6 +438,25 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
             ),
         ),
         types.Tool(
+            name="workflows_extract_from_photarium",
+            description=(
+                "Extract embedded ComfyUI workflow metadata for a Photarium image id. "
+                "Uses Photarium extras when available; otherwise downloads the original artifact "
+                "(not derived JPEG variants) and extracts locally."
+            ),
+            inputSchema=_tool_schema(
+                {
+                    "image_id": {"type": "string"},
+                    "photarium_mcp_url": {"type": "string"},
+                    "namespace": {"type": "string"},
+                    "prefer_prompt": {"type": "boolean"},
+                    "include_raw_metadata": {"type": "boolean"},
+                    "preserve_format": {"type": "boolean"},
+                },
+                ["image_id"],
+            ),
+        ),
+        types.Tool(
             name="workflows_import_from_artifact",
             description="Extract workflow from artifact and save to the store.",
             inputSchema=_tool_schema(
@@ -438,6 +478,7 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
                     "image_id": {"type": "string"},
                     "workflow_id": {"type": "string"},
                     "photarium_mcp_url": {"type": "string"},
+                    "namespace": {"type": "string"},
                     "name": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "hints": {"type": "object"},
@@ -503,6 +544,7 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
         "workflows_capabilities_get": workflow_tools.capabilities_get,
         "workflows_params_get": workflow_tools.params_get,
         "workflows_package": workflow_tools.package,
+        "workflows_recompile": workflow_tools.recompile,
         "workflows_package_many": workflow_tools.package_many,
         "workflows_package_template_get": workflow_tools.package_template_get,
         "workflows_folder_create": workflow_tools.folder_create,
@@ -517,6 +559,7 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
         "workflows_watch": workflow_tools.watch,
         "workflows_status": workflow_tools.status,
         "workflows_extract_from_artifact": workflow_tools.extract_from_artifact,
+        "workflows_extract_from_photarium": workflow_tools.extract_from_photarium,
         "workflows_import_from_artifact": workflow_tools.import_from_artifact,
         "workflows_import_from_photarium": workflow_tools.import_from_photarium,
         "workflows_run_aspect_ratio_adjustment": workflow_tools.run_aspect_ratio_adjustment,

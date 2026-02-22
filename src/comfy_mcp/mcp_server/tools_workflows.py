@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import asyncio
+import base64
+from copy import deepcopy
+import os
 import re
+import tempfile
 import time
 import httpx
 import uuid
@@ -19,9 +23,12 @@ from comfy_mcp.comfy_client.client import ComfyClient
 from comfy_mcp.extraction.adapter import WorkflowExtractor
 from comfy_mcp.extraction.normalize import detect_workflow_format, ui_to_api_format
 from comfy_mcp.mcp_server.policy import Policy
+from comfy_mcp.params.errors import ParamPatchError
+from comfy_mcp.params.infer import sync_meta_requires
 from comfy_mcp.params.patch import patch_workflow
 from comfy_mcp.params.schema import ParamSpec
 from comfy_mcp.reasoning.service import WorkflowReasoningService
+from comfy_mcp.workflow_store.hashing import sha256_json
 from comfy_mcp.workflow_store.meta import build_meta
 from comfy_mcp.workflow_store.errors import WorkflowNotFoundError
 from comfy_mcp.workflow_store.packaging import build_hints_template, package_workflow
@@ -66,12 +73,61 @@ class WorkflowTools:
         "replace",
         "retouch",
         "restyle",
+        "sweep",
         "variant",
+        "variation",
+        "variations",
     }
     _IMAGE_EDIT_TAGS = {"image-edit", "img2img"}
     _IMAGE_EDIT_PREFERRED_WORKFLOWS = {
+        # True img2img (latent-init) for "variations" style requests.
+        "flux_2_klein_4B_variations": 4.0,
         "flux_2_klein_4B": 2.5,
     }
+    _FLOAT_FRIENDLY_NUMERIC_FIELDS = {
+        "cfg",
+        "denoise",
+        "guidance",
+        "scale",
+        "shift",
+        "strength",
+    }
+    _SEMANTIC_NAME_STOP_WORDS = {
+        "a",
+        "an",
+        "and",
+        "as",
+        "at",
+        "by",
+        "for",
+        "from",
+        "in",
+        "into",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "with",
+        "image",
+        "images",
+        "photo",
+        "photos",
+        "picture",
+        "render",
+        "rendering",
+    }
+    _SEMANTIC_HINT_KEYWORDS = (
+        "prompt",
+        "caption",
+        "description",
+        "subject",
+        "title",
+        "concept",
+        "theme",
+        "style",
+        "scene",
+    )
 
     def __init__(
         self,
@@ -426,6 +482,140 @@ class WorkflowTools:
             "errors": errors,
         }
 
+    def recompile(
+        self,
+        workflow_id: str,
+        workflow_input_updates: Optional[list[Dict[str, Any]]] = None,
+        param_overrides: Optional[list[Dict[str, Any]]] = None,
+        hints: Optional[Dict[str, Any]] = None,
+        include_suggestions: bool = True,
+        token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Patch workflow/params by id and regenerate packaged artifacts in one write."""
+        self._policy.enforce_mutation(token)
+        workflow = deepcopy(self._store.read_workflow(workflow_id))
+        workflow_updates_applied = self._apply_workflow_input_updates(workflow, workflow_input_updates or [])
+
+        existing_meta = self._store.read_meta(workflow_id)
+        packaged = package_workflow(
+            workflow_id,
+            workflow,
+            existing_meta=existing_meta,
+            hints=hints or {},
+            include_suggestions=include_suggestions,
+        )
+        params = packaged["params"]
+        overridden_params = self._apply_param_overrides(params, param_overrides or [])
+        params["workflow_hash"] = sha256_json(workflow)
+        packaged["meta"] = sync_meta_requires(packaged["meta"], params)
+
+        self._store.save_workflow(
+            workflow_id,
+            workflow,
+            meta=packaged["meta"],
+            params=params,
+        )
+        return {
+            "workflow_id": workflow_id,
+            "packaged": True,
+            "params_count": len(params.get("params", [])),
+            "workflow_updates_applied": workflow_updates_applied,
+            "params_overridden": overridden_params,
+            "workflow_hash": params.get("workflow_hash"),
+        }
+
+    @staticmethod
+    def _apply_workflow_input_updates(workflow: Dict[str, Any], updates: list[Dict[str, Any]]) -> int:
+        changed = 0
+        for index, update in enumerate(updates):
+            if not isinstance(update, dict):
+                raise ValueError(f"workflow_input_updates[{index}] must be an object")
+            node_id = str(update.get("node_id") or "").strip()
+            input_name = str(update.get("input") or "").strip()
+            if not node_id or not input_name:
+                raise ValueError(
+                    f"workflow_input_updates[{index}] requires non-empty 'node_id' and 'input'"
+                )
+            node = workflow.get(node_id)
+            if not isinstance(node, dict):
+                raise ValueError(f"workflow_input_updates[{index}] unknown node_id '{node_id}'")
+            inputs = node.setdefault("inputs", {})
+            if not isinstance(inputs, dict):
+                raise ValueError(f"workflow_input_updates[{index}] node '{node_id}' has non-object inputs")
+
+            path = update.get("path")
+            value = update.get("value")
+            if not path:
+                inputs[input_name] = value
+                changed += 1
+                continue
+            if not isinstance(path, list):
+                raise ValueError(f"workflow_input_updates[{index}].path must be an array when provided")
+
+            branch = inputs.get(input_name)
+            if not isinstance(branch, dict):
+                branch = {}
+                inputs[input_name] = branch
+            cursor = branch
+            for part in path[:-1]:
+                key = str(part)
+                child = cursor.get(key)
+                if not isinstance(child, dict):
+                    child = {}
+                    cursor[key] = child
+                cursor = child
+            cursor[str(path[-1])] = value
+            changed += 1
+        return changed
+
+    @staticmethod
+    def _apply_param_overrides(params_spec: Dict[str, Any], overrides: list[Dict[str, Any]]) -> list[str]:
+        if not overrides:
+            return []
+        params = params_spec.get("params")
+        if not isinstance(params, list):
+            raise ValueError("params payload missing 'params' list")
+
+        allowed_types = {"int", "float", "string", "bool"}
+        mutable_fields = {"type", "default", "required", "description", "target"}
+        changed_names: list[str] = []
+        for index, update in enumerate(overrides):
+            if not isinstance(update, dict):
+                raise ValueError(f"param_overrides[{index}] must be an object")
+            name = str(update.get("name") or "").strip()
+            if not name:
+                raise ValueError(f"param_overrides[{index}] requires non-empty 'name'")
+
+            target_item = None
+            for item in params:
+                if isinstance(item, dict) and str(item.get("name") or "") == name:
+                    target_item = item
+                    break
+            if target_item is None:
+                raise ValueError(f"param_overrides[{index}] unknown param '{name}'")
+
+            if "type" in update:
+                param_type = str(update.get("type") or "").strip()
+                if param_type not in allowed_types:
+                    raise ValueError(
+                        f"param_overrides[{index}] invalid type '{param_type}' (expected one of {sorted(allowed_types)})"
+                    )
+
+            mutated = False
+            for field in mutable_fields:
+                if field not in update:
+                    continue
+                value = update[field]
+                if field == "required":
+                    value = bool(value)
+                if field == "target" and not isinstance(value, dict):
+                    raise ValueError(f"param_overrides[{index}].target must be an object")
+                target_item[field] = value
+                mutated = True
+            if mutated:
+                changed_names.append(name)
+        return changed_names
+
     def package_template_get(self, workflow_id: str) -> Dict[str, Any]:
         """Return an editable metadata-hints template for one workflow."""
         workflow = self._store.read_workflow(workflow_id)
@@ -529,6 +719,7 @@ class WorkflowTools:
         image_id: str,
         workflow_id: str,
         photarium_mcp_url: str = "http://127.0.0.1:8787",
+        namespace: Optional[str] = None,
         name: Optional[str] = None,
         tags: Optional[list[str]] = None,
         hints: Optional[Dict[str, Any]] = None,
@@ -540,46 +731,39 @@ class WorkflowTools:
         """Import a workflow from a Photarium image and save it in the workflow store."""
         self._policy.enforce_mutation(token)
 
-        extracted = await self._call_remote_tool(
-            photarium_mcp_url,
-            "photarium_extract_workflow",
-            {"imageId": image_id, "includeRawMetadata": include_raw_metadata},
+        remote_args: Dict[str, Any] = {"imageId": image_id}
+        if namespace:
+            remote_args["namespace"] = namespace
+
+        extraction = await self.extract_from_photarium(
+            image_id=image_id,
+            photarium_mcp_url=photarium_mcp_url,
+            namespace=namespace,
+            prefer_prompt=prefer_prompt,
+            include_raw_metadata=include_raw_metadata,
+            preserve_format=False,
+            token=token,
         )
-        if not extracted.get("extracted"):
-            raise ValueError(f"No embedded workflow found for Photarium image: {image_id}")
 
-        ordered_keys = ["prompt", "workflow"] if prefer_prompt else ["workflow", "prompt"]
-        selected_key = None
-        selected_workflow: Optional[Dict[str, Any]] = None
-        for key in ordered_keys:
-            payload = extracted.get(key)
-            if isinstance(payload, dict) and payload:
-                selected_key = key
-                selected_workflow = payload
-                break
-        if selected_workflow is None or selected_key is None:
-            raise ValueError("Photarium extract result did not include a usable workflow payload")
-
-        workflow_format = detect_workflow_format(selected_workflow)
-        if workflow_format == "ui":
-            workflow_json = ui_to_api_format(selected_workflow)
-            workflow_format = "api"
-        else:
-            workflow_json = selected_workflow
+        workflow_json = extraction["workflow"]
+        workflow_format = str(extraction.get("workflow_format") or "api")
+        extraction_source = str(extraction.get("extraction_source") or "unknown")
+        selected_key = str(extraction.get("source_payload") or "workflow")
+        source_meta = extraction.get("source_meta") or {}
 
         payload_bytes = len(json.dumps(workflow_json).encode("utf-8"))
         self._policy.enforce_payload_size(payload_bytes)
 
-        source_meta: Dict[str, Any] = {}
         if name is None or tags is None:
-            try:
-                source_meta = await self._call_remote_tool(
-                    photarium_mcp_url,
-                    "photarium_get",
-                    {"imageId": image_id},
-                )
-            except Exception:
-                source_meta = {}
+            if not source_meta:
+                try:
+                    source_meta = await self._call_remote_tool(
+                        photarium_mcp_url,
+                        "photarium_get",
+                        remote_args,
+                    )
+                except Exception:
+                    source_meta = {}
 
         source_tags = source_meta.get("tags")
         resolved_tags = tags if tags is not None else [str(t) for t in source_tags] if isinstance(source_tags, list) else []
@@ -618,9 +802,222 @@ class WorkflowTools:
             "id": workflow_id,
             "image_id": image_id,
             "source_payload": selected_key,
+            "extraction_source": extraction_source,
             "workflow_format": workflow_format,
             "params_count": len(packaged["params"].get("params", [])),
         }
+
+    async def extract_from_photarium(
+        self,
+        image_id: str,
+        photarium_mcp_url: str = "http://127.0.0.1:8787",
+        namespace: Optional[str] = None,
+        prefer_prompt: bool = True,
+        include_raw_metadata: bool = False,
+        preserve_format: bool = False,
+        token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Extract a workflow payload from Photarium, falling back to the original artifact download."""
+        self._policy.enforce_mutation(token)
+
+        remote_args: Dict[str, Any] = {"imageId": image_id}
+        if namespace:
+            remote_args["namespace"] = namespace
+
+        source_meta: Dict[str, Any] = {}
+        extracted: Dict[str, Any] = {}
+        extraction_source = "photarium_extract_workflow"
+
+        try:
+            extracted = await self._call_remote_tool(
+                photarium_mcp_url,
+                "photarium_extract_workflow",
+                {**remote_args, "includeRawMetadata": include_raw_metadata},
+            )
+        except Exception as exc:
+            extracted = {"extracted": False, "message": str(exc)}
+
+        if not extracted.get("extracted"):
+            # Prefer workflow JSON stored in Photarium extras if present.
+            try:
+                extras_payload = await self._call_remote_tool(
+                    photarium_mcp_url,
+                    "photarium_extras_get",
+                    remote_args,
+                )
+            except Exception:
+                extras_payload = {}
+            extras_workflow = self._extract_workflow_from_extras(extras_payload)
+            if extras_workflow is not None:
+                extracted = {"extracted": True, "workflow": extras_workflow}
+                extraction_source = "photarium_extras_get"
+
+        selected_workflow: Optional[Dict[str, Any]] = None
+        selected_key: Optional[str] = None
+        if extracted.get("extracted"):
+            ordered_keys = ["prompt", "workflow"] if prefer_prompt else ["workflow", "prompt"]
+            for key in ordered_keys:
+                payload = self._coerce_json_object(extracted.get(key))
+                if payload is not None:
+                    selected_key = key
+                    selected_workflow = payload
+                    break
+            if selected_workflow is None:
+                selected_key = "workflow"
+                selected_workflow = self._coerce_json_object(extracted.get("workflow"))
+
+        if selected_workflow is None:
+            # Last resort: download the original artifact and run local extraction (avoids JPEG variants).
+            try:
+                source_meta = await self._call_remote_tool(
+                    photarium_mcp_url,
+                    "photarium_get",
+                    remote_args,
+                )
+            except Exception:
+                source_meta = {}
+
+            with tempfile.TemporaryDirectory(prefix="comfy_mcp_photarium_extract_") as td:
+                tmp_dir = Path(td)
+                requested = tmp_dir / f"{image_id}.bin"
+                download_args: Dict[str, Any] = {
+                    "imageId": image_id,
+                    "savePath": str(requested),
+                    "includeBase64": False,
+                }
+                download_result: Dict[str, Any] | None = None
+                download_tool = "photarium_download_original"
+                try:
+                    download_result = await self._call_remote_tool(
+                        photarium_mcp_url,
+                        download_tool,
+                        {**download_args, **({"namespace": namespace} if namespace else {})},
+                    )
+                except Exception:
+                    download_tool = "photarium_download_image"
+                    download_result = await self._call_remote_tool(
+                        photarium_mcp_url,
+                        download_tool,
+                        {**download_args, **({"namespace": namespace} if namespace else {})},
+                    )
+
+                artifact_path = self._normalize_downloaded_path(requested, download_result or {})
+                extracted_local = self.extract_from_artifact(str(artifact_path), preserve_format=preserve_format)
+                extracted_local["extraction_source"] = download_tool
+                extracted_local["source_payload"] = "workflow"
+                extracted_local["source_meta"] = source_meta
+                return extracted_local
+
+        if selected_workflow is None or selected_key is None:
+            if not source_meta:
+                try:
+                    source_meta = await self._call_remote_tool(
+                        photarium_mcp_url,
+                        "photarium_get",
+                        remote_args,
+                    )
+                except Exception:
+                    source_meta = {}
+            raise ValueError(self._missing_workflow_message(image_id, extracted, source_meta))
+
+        workflow_format = detect_workflow_format(selected_workflow)
+        workflow_json = selected_workflow
+        if workflow_format == "ui" and not preserve_format:
+            workflow_json = ui_to_api_format(selected_workflow)
+            workflow_format = "api"
+
+        return {
+            "workflow": workflow_json,
+            "workflow_format": workflow_format,
+            "extraction_source": extraction_source,
+            "source_payload": selected_key,
+            "source_meta": source_meta,
+        }
+
+    @staticmethod
+    def _normalize_downloaded_path(requested_path: Path, download_result: Dict[str, Any]) -> Path:
+        """Best-effort resolution of the actual file path created by a Photarium download tool."""
+        saved_path = download_result.get("savedPath") if isinstance(download_result, dict) else None
+        if isinstance(saved_path, str) and saved_path.strip():
+            candidate = Path(saved_path)
+            if candidate.exists():
+                return candidate
+
+        filename = download_result.get("filename") if isinstance(download_result, dict) else None
+        if requested_path.exists() and requested_path.is_file():
+            return requested_path
+        if requested_path.exists() and requested_path.is_dir() and isinstance(filename, str) and filename:
+            candidate = requested_path / filename
+            if candidate.exists():
+                return candidate
+
+        # Fall back to scanning the temp dir for any file.
+        parent = requested_path.parent
+        if parent.exists():
+            files = [p for p in parent.iterdir() if p.is_file()]
+            if len(files) == 1:
+                return files[0]
+        return requested_path
+
+    @staticmethod
+    def _extract_workflow_from_extras(extras_payload: Dict[str, Any]) -> Dict[str, Any] | None:
+        if not isinstance(extras_payload, dict):
+            return None
+        record = extras_payload.get("record")
+        if not isinstance(record, dict):
+            return None
+        comfy = record.get("comfyWorkflow")
+        if not isinstance(comfy, dict):
+            return None
+
+        for key in ("workflowJson", "workflow", "promptJson", "prompt"):
+            candidate = WorkflowTools._coerce_json_object(comfy.get(key))
+            if candidate is not None:
+                return candidate
+        return None
+
+    @staticmethod
+    def _coerce_json_object(value: Any) -> Dict[str, Any] | None:
+        if isinstance(value, dict) and value:
+            return value
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+        return None
+
+    @staticmethod
+    def _missing_workflow_message(
+        image_id: str,
+        extraction_payload: Dict[str, Any],
+        source_meta: Dict[str, Any],
+    ) -> str:
+        raw = source_meta.get("raw")
+        raw = raw if isinstance(raw, dict) else {}
+        generated_by = source_meta.get("generatedBy") or raw.get("generatedBy")
+        comfy_detected = raw.get("comfyMetadataDetected")
+        comfy_source = raw.get("comfyMetadataSource")
+        namespace = source_meta.get("namespace") or raw.get("namespace")
+        source_url = source_meta.get("sourceUrl") or raw.get("sourceUrl")
+        original_url = source_meta.get("originalUrl") or raw.get("originalUrl")
+        extract_message = extraction_payload.get("message")
+        details = [
+            f"extract_message={extract_message!r}",
+            f"generatedBy={generated_by!r}",
+            f"comfyMetadataDetected={comfy_detected!r}",
+            f"comfyMetadataSource={comfy_source!r}",
+            f"namespace={namespace!r}",
+            f"sourceUrl={source_url!r}",
+            f"originalUrl={original_url!r}",
+        ]
+        return f"No embedded workflow found for Photarium image: {image_id}. " + ", ".join(details)
 
     def delete(self, workflow_id: str, token: Optional[str] = None) -> Dict[str, Any]:
         """Delete a workflow entry from the store."""
@@ -645,6 +1042,18 @@ class WorkflowTools:
         if not params:
             raise ValueError("Params schema missing for workflow")
         spec = ParamSpec.model_validate(params)
+        promoted_params = self._auto_promote_numeric_param_types(spec, overrides)
+        if promoted_params:
+            try:
+                existing_meta = self._store.read_meta(workflow_id)
+                self._store.save_workflow(
+                    workflow_id,
+                    workflow,
+                    meta=existing_meta,
+                    params=spec.model_dump(),
+                )
+            except Exception:
+                pass
         normalized_overrides = await self._normalize_file_overrides(workflow, spec, overrides)
         normalized_overrides = await self._normalize_aspect_overrides(
             spec=spec,
@@ -657,12 +1066,22 @@ class WorkflowTools:
         )
         if auto_aspect:
             normalized_overrides.update(auto_aspect.get("overrides", {}))
-        patched = patch_workflow(workflow, spec, normalized_overrides, force=force)
-        filename_prefix_used = self._ensure_unique_filename_prefix(
+        expected_hash = str(spec.workflow_hash)
+        actual_hash = sha256_json(workflow)
+        hash_mismatch_auto_forced = False
+        try:
+            patched = patch_workflow(workflow, spec, normalized_overrides, force=force)
+        except ParamPatchError as exc:
+            if force or "hash mismatch" not in str(exc).lower():
+                raise
+            patched = patch_workflow(workflow, spec, normalized_overrides, force=True)
+            hash_mismatch_auto_forced = True
+        filename_prefix_used = await self._ensure_unique_filename_prefix(
             workflow_id,
             patched,
             spec,
             normalized_overrides,
+            raw_overrides=overrides,
         )
         payload_bytes = len(json.dumps(patched).encode("utf-8"))
         self._policy.enforce_payload_size(payload_bytes)
@@ -670,6 +1089,11 @@ class WorkflowTools:
         queue_result = await self._client.queue_prompt(patched, client_id=client_id)
         prompt_id = queue_result.get("prompt_id")
         if not prompt_id:
+            if hash_mismatch_auto_forced:
+                queue_result["workflow_hash_mismatch_recovered"] = True
+                queue_result["workflow_hash_expected"] = expected_hash
+                queue_result["workflow_hash_actual"] = actual_hash
+                queue_result["workflow_force_applied"] = True
             return queue_result
         result = await self._wait_and_extract(
             prompt_id,
@@ -683,9 +1107,33 @@ class WorkflowTools:
             result["auto_aspect_ratio_applied"] = auto_aspect.get("applied_ratio")
             result["auto_aspect_ratio_anchor"] = auto_aspect.get("applied_anchor")
             result["auto_aspect_ratio_reason"] = auto_aspect.get("reason")
+        if hash_mismatch_auto_forced:
+            result["workflow_hash_mismatch_recovered"] = True
+            result["workflow_hash_expected"] = expected_hash
+            result["workflow_hash_actual"] = actual_hash
+            result["workflow_force_applied"] = True
         if filename_prefix_used:
             result["filename_prefix_used"] = filename_prefix_used
+        if promoted_params:
+            result["param_type_auto_promoted"] = promoted_params
         return result
+
+    def _auto_promote_numeric_param_types(self, spec: ParamSpec, overrides: Dict[str, Any]) -> list[str]:
+        promoted: list[str] = []
+        param_map = spec.param_map()
+        for name, value in overrides.items():
+            if isinstance(value, bool) or not isinstance(value, float):
+                continue
+            item = param_map.get(name)
+            if item is None or item.type != "int":
+                continue
+            name_key = name.lower()
+            input_key = str(item.target.input or "").lower()
+            if name_key not in self._FLOAT_FRIENDLY_NUMERIC_FIELDS and input_key not in self._FLOAT_FRIENDLY_NUMERIC_FIELDS:
+                continue
+            item.type = "float"
+            promoted.append(name)
+        return promoted
 
     async def _normalize_aspect_overrides(
         self,
@@ -783,12 +1231,13 @@ class WorkflowTools:
 
         return normalized
 
-    def _ensure_unique_filename_prefix(
+    async def _ensure_unique_filename_prefix(
         self,
         workflow_id: str,
         workflow: Dict[str, Any],
         spec: ParamSpec,
         overrides: Dict[str, Any],
+        raw_overrides: Dict[str, Any],
     ) -> Optional[str]:
         """Set a unique SaveImage filename_prefix unless caller already provided one."""
         prefix_param_names = self._saveimage_prefix_param_names(workflow, spec)
@@ -799,7 +1248,12 @@ class WorkflowTools:
         if user_set_prefix:
             return None
 
-        prefix = self._make_runtime_filename_prefix(workflow_id)
+        semantic_label = await self._derive_semantic_filename_label(
+            workflow=workflow,
+            spec=spec,
+            raw_overrides=raw_overrides,
+        )
+        prefix = self._make_runtime_filename_prefix(workflow_id, semantic_label=semantic_label)
         updated = False
         for node in workflow.values():
             if not isinstance(node, dict):
@@ -968,13 +1422,163 @@ class WorkflowTools:
         return names
 
     @staticmethod
-    def _make_runtime_filename_prefix(workflow_id: str) -> str:
+    def _make_runtime_filename_prefix(workflow_id: str, semantic_label: str | None = None) -> str:
+        if semantic_label:
+            cleaned = re.sub(r"[^A-Za-z0-9]+", "", semantic_label).strip()
+            if cleaned:
+                stamp_ms = int(time.time() * 1000)
+                suffix = uuid.uuid4().hex[:8]
+                return f"{cleaned[:60]}_{stamp_ms}_{suffix}"
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", workflow_id).strip("_")
         if not slug:
             slug = "workflow"
         stamp_ms = int(time.time() * 1000)
         suffix = uuid.uuid4().hex[:8]
         return f"mcp_{slug[:36]}_{stamp_ms}_{suffix}"
+
+    async def _derive_semantic_filename_label(
+        self,
+        *,
+        workflow: Dict[str, Any],
+        spec: ParamSpec,
+        raw_overrides: Dict[str, Any],
+    ) -> str | None:
+        input_image = self._find_local_input_image_path(
+            workflow=workflow,
+            spec=spec,
+            raw_overrides=raw_overrides,
+        )
+        if input_image is not None:
+            image_label = await self._semantic_name_from_image(input_image)
+            if image_label:
+                return image_label
+
+        return self._semantic_name_from_overrides(raw_overrides)
+
+    async def _semantic_name_from_image(self, image_path: Path) -> str | None:
+        if not image_path.exists() or not image_path.is_file():
+            return None
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return None
+        return await asyncio.to_thread(self._semantic_name_from_image_sync, image_path)
+
+    def _semantic_name_from_image_sync(self, image_path: Path) -> str | None:
+        if os.environ.get("COMFY_MCP_DISABLE_VISION_NAMING", "").strip().lower() in {"1", "true", "yes"}:
+            return None
+
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            return None
+
+        mime = self._mime_from_image_path(image_path)
+        if mime is None:
+            return None
+
+        try:
+            from openai import OpenAI  # type: ignore
+        except Exception:
+            return None
+
+        image_bytes = image_path.read_bytes()
+        data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        prompt = (
+            "Return a semantic filename label for this image as 2-6 CamelCase words. "
+            "Return only the CamelCase label, no spaces/punctuation/quotes."
+        )
+
+        client = OpenAI(api_key=api_key, timeout=12.0)
+        for model in ("gpt-4o", "gpt-4o-mini"):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    temperature=0.1,
+                    max_tokens=32,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": data_url}},
+                            ],
+                        }
+                    ],
+                )
+                content = ""
+                if response.choices:
+                    message = response.choices[0].message
+                    content = str(getattr(message, "content", "") or "").strip()
+                label = self._to_camel_case_label(content)
+                if label:
+                    return label
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _mime_from_image_path(path: Path) -> str | None:
+        suffix = path.suffix.lower()
+        return {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+        }.get(suffix)
+
+    def _semantic_name_from_overrides(self, overrides: Dict[str, Any]) -> str | None:
+        candidates: list[tuple[int, int, str]] = []
+        for key, value in overrides.items():
+            if not isinstance(value, str):
+                continue
+            text = value.strip()
+            if not text:
+                continue
+            lowered_key = key.lower()
+            priority = 0
+            if any(token in lowered_key for token in self._SEMANTIC_HINT_KEYWORDS):
+                priority = 2
+            elif len(text) <= 140 and (" " in text or "-" in text or "_" in text):
+                priority = 1
+            if priority <= 0:
+                continue
+            candidates.append((priority, len(text), text))
+
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        for _, _, text in candidates:
+            label = self._to_camel_case_label(text)
+            if label:
+                return label
+        return None
+
+    def _to_camel_case_label(self, value: str) -> str | None:
+        tokens = re.findall(r"[A-Za-z0-9]+", value)
+        if not tokens:
+            return None
+        filtered: list[str] = []
+        for token in tokens:
+            lower = token.lower()
+            if lower in self._SEMANTIC_NAME_STOP_WORDS:
+                continue
+            if lower in {"jpg", "jpeg", "png", "webp", "gif", "bmp"}:
+                continue
+            if len(token) == 1 and not token.isdigit():
+                continue
+            filtered.append(token)
+        if not filtered:
+            return None
+
+        selected = filtered[:6]
+        words = []
+        for token in selected:
+            if token.isdigit():
+                words.append(token)
+                continue
+            words.append(token[0].upper() + token[1:].lower())
+        label = "".join(words)
+        if not label:
+            return None
+        return label[:60]
 
     def image_info(self, file_path: str) -> Dict[str, Any]:
         """Inspect a local image and return dimensions + aspect-ratio details."""
@@ -1431,11 +2035,7 @@ class WorkflowTools:
 
         workflow = self._store.read_workflow(workflow_id)
         if not workflow:
-            if workflow_id != "aspect_comfyui_01077":
-                workflow = self._store.read_workflow("aspect_comfyui_01077")
-                workflow_id = "aspect_comfyui_01077"
-            if not workflow:
-                raise ValueError("Workflow not found: aspect_ratio_adjustment or aspect_comfyui_01077")
+            raise ValueError(f"Workflow not found: {workflow_id}")
 
         image_file = Path(image_path)
         if not image_file.exists():
@@ -1493,7 +2093,17 @@ class WorkflowTools:
         if "79" in patched and isinstance(patched["79"], dict):
             inputs = patched["79"].setdefault("inputs", {})
             ratio_slug = normalized_custom_ratio.replace(":", "x").lower()
-            base_raw = output_base_name if output_base_name is not None else Path(uploaded_name).stem
+            semantic_base = None
+            if output_base_name is None:
+                semantic_base = await self._semantic_name_from_image(image_file)
+                if not semantic_base:
+                    semantic_base = self._semantic_name_from_overrides(
+                        {
+                            "positive_prompt": positive_prompt or "",
+                            "negative_prompt": negative_prompt or "",
+                        }
+                    )
+            base_raw = output_base_name if output_base_name is not None else (semantic_base or Path(uploaded_name).stem)
             base_clean = _sanitize_base(_strip_comfy_counter_suffixes(base_raw))
             prefix = f"{base_clean}__{ratio_slug}"
             if seed is not None:

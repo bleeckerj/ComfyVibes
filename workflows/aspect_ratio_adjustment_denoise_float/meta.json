@@ -1,0 +1,70 @@
+{
+  "id": "aspect_ratio_adjustment_denoise_float",
+  "name": "Aspect Ratio Adjustment (Qwen, Conditioned)",
+  "description": "Aspect-ratio change via empty-latent sampling with image conditioning (not latent-init img2img). denoise=0 will look blank/gray; use higher denoise for generation.",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "sampler",
+    "qwen",
+    "flux",
+    "aspect-ratio",
+    "upscaling"
+  ],
+  "use_cases": [
+    "Modify an existing image while preserving composition.",
+    "Create 1:1, 4:5, or 9:16 variants for publishing surfaces.",
+    "Increase output resolution while retaining style."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "prompt",
+      "prompt_2",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name",
+      "cpu_offload",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "image",
+      "megapixel",
+      "megapixels",
+      "model_name",
+      "num_blocks_on_gpu",
+      "preview",
+      "resolution_steps",
+      "shift",
+      "strength",
+      "type",
+      "upscale_method",
+      "use_pin_memory",
+      "vae_name"
+    ]
+  }
+}

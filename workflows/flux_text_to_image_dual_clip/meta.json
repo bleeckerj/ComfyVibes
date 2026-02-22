@@ -1,0 +1,54 @@
+{
+  "id": "flux_text_to_image_dual_clip",
+  "name": "Flux Text-to-Image (Dual CLIP)",
+  "description": "Text-to-image generation using Flux with dual CLIP text encoding and guidance control. No input image required.",
+  "tags": [
+    "text-to-image",
+    "flux",
+    "dual-clip",
+    "guidance"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "width",
+      "batch_size",
+      "prompt",
+      "prompt_2",
+      "sampler_name",
+      "scheduler",
+      "clip_name1",
+      "clip_name2",
+      "device",
+      "filename_prefix",
+      "guidance",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  },
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

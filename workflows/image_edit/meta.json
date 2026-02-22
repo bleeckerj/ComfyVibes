@@ -1,7 +1,7 @@
 {
   "id": "image_edit",
   "name": "Qwen Image Edit",
-  "description": "Edit an existing image using Qwen/Flux with positive and negative text prompts. Requires an input image. Supports aspect ratio control via FluxResolutionNode.",
+  "description": "Prompt-guided image edit using Qwen. Note: this workflow samples from an empty latent (image is used as conditioning), so denoise=0 will look like a blank/gray image. For classic img2img variations where denoise=0 preserves the input, use the dedicated variations workflow.",
   "tags": [
     "image-edit",
     "img2img",

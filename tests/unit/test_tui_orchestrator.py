@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -136,6 +137,89 @@ class SemanticSearchLLM:
             return LLMResponse(
                 content=None,
                 tool_calls=[ToolCall(call_id="c1", name="photarium_search", arguments={"query": "jackets"})],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class UploadLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="upload1",
+                        name="photarium_upload_url",
+                        arguments={
+                            "url": (
+                                "http://127.0.0.1:8188/view?"
+                                "filename=NeonCityStreetRainReflections__4x5__s7__a1b2c3d4_00001_.png&type=output"
+                            )
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class GetThenUploadLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[ToolCall(call_id="get1", name="photarium_get", arguments={"imageId": "src-123"})],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="upload2",
+                        name="photarium_upload_from_path",
+                        arguments={
+                            "filePath": "/tmp/generated.png",
+                            "parentId": "src-123",
+                            "name": "VariantImage",
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class UploadFromPathLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="upload1",
+                        name="photarium_upload_from_path",
+                        arguments={"filePath": "/tmp/generated.png", "name": "VariantImage"},
+                    )
+                ],
             )
         return LLMResponse(content="done", tool_calls=[])
 
@@ -327,3 +411,194 @@ async def test_orchestrator_surfaces_image_ids_in_semantic_search_results():
     assert result["primary_image_id"] == "img_1"
     assert result["results"][0]["image_id"] == "img_1"
     assert result["results"][1]["image_id"] == "img_2"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_infers_camelcase_name_for_photarium_upload_call():
+    llm = UploadLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_url",
+                    "description": "Upload image by URL",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string"},
+                            "name": {"type": "string"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("upload this image")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert router.last_name == "photarium_upload_url"
+    assert router.last_arguments == {
+        "url": (
+            "http://127.0.0.1:8188/view?"
+            "filename=NeonCityStreetRainReflections__4x5__s7__a1b2c3d4_00001_.png&type=output"
+        ),
+        "name": "NeonCityStreetRainReflections",
+    }
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_converts_upload_url_to_upload_from_path_with_clean_filename(tmp_path: Path):
+    llm = UploadLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_url",
+                    "description": "Upload image by URL",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {"type": "string"},
+                            "name": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload image by local path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "immutable_filename": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    downloaded = tmp_path / "raw_download.png"
+    downloaded.write_bytes(b"png")
+
+    async def _fake_download(url: str, label: str) -> Path:
+        assert "filename=NeonCityStreetRainReflections" in url
+        assert label == "NeonCityStreetRainReflections"
+        return downloaded
+
+    async def _fake_vision_label(image_path: Path) -> str | None:
+        assert image_path.exists()
+        return "NeonCityStreetRainReflections"
+
+    orch._download_url_to_temp_file = _fake_download  # type: ignore[method-assign]
+    orch._vision_semantic_label_from_image = _fake_vision_label  # type: ignore[method-assign]
+
+    answer, events = await orch.process("upload this image")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert router.last_name == "photarium_upload_from_path"
+    assert router.last_arguments is not None
+    assert router.last_arguments["name"] == "NeonCityStreetRainReflections"
+    assert router.last_arguments["immutable_filename"] == "NeonCityStreetRainReflections"
+    assert router.last_arguments["filePath"].endswith("NeonCityStreetRainReflections.png")
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_infers_upload_namespace_from_source_image_namespace():
+    llm = GetThenUploadLLM()
+    router = RecordingRouter()
+
+    async def _call_tool(name, arguments):
+        router.last_name = name
+        router.last_arguments = dict(arguments or {})
+        if name == "photarium_get":
+            return {"id": "src-123", "namespace": "campaign-a"}
+        return {"ok": True}
+
+    router.call_tool = _call_tool  # type: ignore[method-assign]
+
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {"type": "object", "properties": {"imageId": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload image by local path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "parentId": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("create variant from src-123")
+
+    assert answer == "done"
+    assert len(events) == 2
+    assert events[1].name == "photarium_upload_from_path"
+    assert events[1].arguments["namespace"] == "campaign-a"
+    assert router.last_arguments is not None
+    assert router.last_arguments["namespace"] == "campaign-a"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_defaults_upload_namespace_to_cf_default_when_missing():
+    llm = UploadFromPathLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload image by local path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("upload this image")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].arguments["namespace"] == "cf-default"
+    assert router.last_arguments is not None
+    assert router.last_arguments["namespace"] == "cf-default"

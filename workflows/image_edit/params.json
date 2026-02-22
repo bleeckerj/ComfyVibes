@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "workflow_id": "image_edit",
-  "workflow_hash": "b2d493d052942de9b5bbf52b66ac60861998c84aafddd1e5aaeae6640e46013e",
+  "workflow_hash": "9d02b01c9cca956961f6eaf406919c3ca7f053ade47e7d6a14ce2568e3cc51d0",
   "params": [
     {
       "name": "seed",
@@ -29,8 +29,8 @@
     },
     {
       "name": "cfg",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "KSampler.cfg",
       "target": {
@@ -41,8 +41,8 @@
     },
     {
       "name": "denoise",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "KSampler.denoise",
       "target": {
@@ -210,7 +210,7 @@
     {
       "name": "image",
       "type": "string",
-      "default": "07SCI-FIRSTPROOF-01-tljw-superJumbo.webp",
+      "default": "",
       "required": false,
       "description": "Load Image.image",
       "target": {
@@ -233,8 +233,8 @@
     },
     {
       "name": "megapixels",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "ImageScaleToTotalPixels.megapixels",
       "target": {
@@ -293,8 +293,8 @@
     },
     {
       "name": "shift",
-      "type": "int",
-      "default": 3,
+      "type": "float",
+      "default": 3.0,
       "required": false,
       "description": "ModelSamplingAuraFlow.shift",
       "target": {
@@ -305,8 +305,8 @@
     },
     {
       "name": "strength",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "CFGNorm.strength",
       "target": {

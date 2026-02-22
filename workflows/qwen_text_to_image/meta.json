@@ -1,0 +1,54 @@
+{
+  "id": "qwen_text_to_image",
+  "name": "Qwen Text-to-Image",
+  "description": "Text-to-image generation using Nunchaku Qwen model with Flux sampling. No input image required.",
+  "tags": [
+    "text-to-image",
+    "qwen",
+    "nunchaku",
+    "flux"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "width",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "cpu_offload",
+      "device",
+      "filename_prefix",
+      "model_name",
+      "num_blocks_on_gpu",
+      "shift",
+      "type",
+      "use_pin_memory",
+      "vae_name"
+    ]
+  },
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

@@ -194,6 +194,74 @@ async def test_workflow_tools_run_and_wait(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_workflow_tools_run_auto_recovers_hash_mismatch_once(tmp_path: Path) -> None:
+    """workflows_run should auto-force patching on hash mismatch and continue."""
+    store = WorkflowStore(tmp_path)
+    workflow = {"1": {"class_type": "KSampler", "inputs": {"seed": 1}}}
+    params = {
+        "schema_version": "1",
+        "workflow_id": "demo",
+        # Intentionally stale hash to simulate local workflow edits since packaging.
+        "workflow_hash": "0" * 64,
+        "params": [
+            {
+                "name": "seed",
+                "type": "int",
+                "required": True,
+                "target": {"mode": "direct", "node_id": "1", "input": "seed"},
+            }
+        ],
+    }
+    store.save_workflow("demo", workflow, params=params)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    tools = WorkflowTools(store, FakeComfyClient(), policy, extractor=FakeExtractor())
+
+    result = await tools.run("demo", {"seed": 7})
+
+    assert result["prompt_id"] == "abc123"
+    assert result["workflow_hash_mismatch_recovered"] is True
+    assert result["workflow_hash_expected"] == "0" * 64
+    assert result["workflow_hash_actual"] == sha256_json(workflow)
+    assert result["workflow_force_applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_workflow_tools_run_auto_promotes_float_friendly_int_param_types(tmp_path: Path) -> None:
+    store = WorkflowStore(tmp_path)
+    workflow = {"3": {"class_type": "KSampler", "inputs": {"seed": 1, "denoise": 1}}}
+    params = {
+        "schema_version": "1",
+        "workflow_id": "demo",
+        "workflow_hash": sha256_json(workflow),
+        "params": [
+            {
+                "name": "seed",
+                "type": "int",
+                "required": True,
+                "target": {"mode": "direct", "node_id": "3", "input": "seed"},
+            },
+            {
+                "name": "denoise",
+                "type": "int",
+                "required": False,
+                "target": {"mode": "direct", "node_id": "3", "input": "denoise"},
+            },
+        ],
+    }
+    store.save_workflow("demo", workflow, params=params)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    tools = WorkflowTools(store, FakeComfyClient(), policy, extractor=FakeExtractor())
+
+    result = await tools.run("demo", {"seed": 7, "denoise": 0.5})
+
+    assert result["prompt_id"] == "abc123"
+    assert result["param_type_auto_promoted"] == ["denoise"]
+    updated_params = store.read_params("demo") or {}
+    denoise = next(item for item in updated_params.get("params", []) if item.get("name") == "denoise")
+    assert denoise.get("type") == "float"
+
+
+@pytest.mark.asyncio
 async def test_workflow_tools_status_reports_queue_and_progress(tmp_path: Path) -> None:
     store = WorkflowStore(tmp_path)
     policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
@@ -665,6 +733,56 @@ async def test_workflow_tools_run_sets_unique_filename_prefix_for_saveimage(tmp_
 
 
 @pytest.mark.asyncio
+async def test_workflow_tools_run_uses_semantic_camelcase_prefix_from_prompt_text(tmp_path: Path, monkeypatch) -> None:
+    store = WorkflowStore(tmp_path)
+    workflow = {
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1}},
+        "11": {"class_type": "CLIPTextEncode", "inputs": {"text": "default"}},
+        "79": {"class_type": "SaveImage", "inputs": {"filename_prefix": "ComfyUI", "images": ["3", 0]}},
+    }
+    params = {
+        "schema_version": "1",
+        "workflow_id": "demo",
+        "workflow_hash": sha256_json(workflow),
+        "params": [
+            {
+                "name": "seed",
+                "type": "int",
+                "required": True,
+                "target": {"mode": "direct", "node_id": "3", "input": "seed"},
+            },
+            {
+                "name": "positive_prompt",
+                "type": "string",
+                "required": False,
+                "target": {"mode": "direct", "node_id": "11", "input": "text"},
+            },
+            {
+                "name": "filename_prefix",
+                "type": "string",
+                "required": False,
+                "target": {"mode": "direct", "node_id": "79", "input": "filename_prefix"},
+            },
+        ],
+    }
+    store.save_workflow("demo", workflow, params=params)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    client = FakeComfyClient()
+    tools = WorkflowTools(store, client, policy, extractor=FakeExtractor())
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result = await tools.run(
+        "demo",
+        {"seed": 7, "positive_prompt": "neon city street rain reflections"},
+    )
+
+    assert result["prompt_id"] == "abc123"
+    assert result.get("filename_prefix_used", "").startswith("NeonCityStreetRainReflections_")
+    assert client.last_prompt is not None
+    assert client.last_prompt["79"]["inputs"]["filename_prefix"].startswith("NeonCityStreetRainReflections_")
+
+
+@pytest.mark.asyncio
 async def test_workflow_tools_run_respects_user_filename_prefix_override(tmp_path: Path) -> None:
     """workflows_run should not overwrite caller-provided filename_prefix."""
     store = WorkflowStore(tmp_path)
@@ -915,11 +1033,13 @@ async def test_workflow_tools_import_from_photarium(tmp_path: Path, monkeypatch)
     async def _fake_remote(base_url: str, tool_name: str, args: dict):
         assert base_url == "http://127.0.0.1:8787"
         if tool_name == "photarium_extract_workflow":
+            assert args["namespace"] == "cf-default"
             return {
                 "extracted": True,
                 "prompt": {"1": {"class_type": "KSampler", "inputs": {"seed": 123, "steps": 8}}},
             }
         if tool_name == "photarium_get":
+            assert args["namespace"] == "cf-default"
             return {"tags": ["photarium-source", "editorial"]}
         raise AssertionError(f"Unexpected remote tool call: {tool_name}")
 
@@ -929,16 +1049,163 @@ async def test_workflow_tools_import_from_photarium(tmp_path: Path, monkeypatch)
         image_id="img_123",
         workflow_id="from_photarium",
         photarium_mcp_url="http://127.0.0.1:8787",
+        namespace="cf-default",
     )
 
     assert result["id"] == "from_photarium"
     assert result["image_id"] == "img_123"
+    assert result["extraction_source"] == "photarium_extract_workflow"
     workflow = store.read_workflow("from_photarium")
     assert workflow["1"]["class_type"] == "KSampler"
     params = store.read_params("from_photarium") or {}
     assert any(item.get("name") == "seed" for item in params.get("params", []))
     meta = store.read_meta("from_photarium") or {}
     assert "photarium-source" in (meta.get("tags") or [])
+
+
+@pytest.mark.asyncio
+async def test_workflow_tools_import_from_photarium_falls_back_to_extras(tmp_path: Path, monkeypatch) -> None:
+    """Photarium import should use extras.comfyWorkflow when PNG extraction is unavailable."""
+    store = WorkflowStore(tmp_path)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    tools = WorkflowTools(store, FakeComfyClient(), policy, extractor=FakeExtractor())
+
+    async def _fake_remote(base_url: str, tool_name: str, args: dict):
+        assert base_url == "http://127.0.0.1:8787"
+        if tool_name == "photarium_extract_workflow":
+            assert args["namespace"] == "cf-default"
+            return {
+                "extracted": False,
+                "message": "Not a PNG file; Comfy workflow extraction currently supports PNG embedded metadata.",
+            }
+        if tool_name == "photarium_extras_get":
+            assert args["namespace"] == "cf-default"
+            return {
+                "imageId": "img_456",
+                "record": {
+                    "comfyWorkflow": {
+                        "workflowJson": json.dumps(
+                            {"1": {"class_type": "KSampler", "inputs": {"seed": 321, "steps": 8}}}
+                        )
+                    }
+                },
+            }
+        if tool_name == "photarium_get":
+            assert args["namespace"] == "cf-default"
+            return {"tags": ["photarium-source", "jpeg-original"]}
+        raise AssertionError(f"Unexpected remote tool call: {tool_name}")
+
+    monkeypatch.setattr(tools, "_call_remote_tool", _fake_remote)
+
+    result = await tools.import_from_photarium(
+        image_id="img_456",
+        workflow_id="from_photarium_extras",
+        photarium_mcp_url="http://127.0.0.1:8787",
+        namespace="cf-default",
+    )
+
+    assert result["id"] == "from_photarium_extras"
+    assert result["image_id"] == "img_456"
+    assert result["extraction_source"] == "photarium_extras_get"
+    workflow = store.read_workflow("from_photarium_extras")
+    assert workflow["1"]["class_type"] == "KSampler"
+    params = store.read_params("from_photarium_extras") or {}
+    assert any(item.get("name") == "seed" for item in params.get("params", []))
+
+
+@pytest.mark.asyncio
+async def test_workflow_tools_extract_from_photarium_downloads_original_when_needed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Photarium extraction should fall back to downloading original artifact and extracting locally."""
+    store = WorkflowStore(tmp_path)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    tools = WorkflowTools(store, FakeComfyClient(), policy, extractor=FakeExtractor())
+
+    async def _fake_remote(base_url: str, tool_name: str, args: dict):
+        assert base_url == "http://127.0.0.1:8787"
+        if tool_name == "photarium_extract_workflow":
+            return {
+                "extracted": False,
+                "message": "Not a PNG file; Comfy workflow extraction currently supports PNG embedded metadata.",
+            }
+        if tool_name == "photarium_extras_get":
+            return {"record": {}}
+        if tool_name == "photarium_get":
+            return {"raw": {"originalUrl": "https://example.invalid/original.png"}}
+        if tool_name == "photarium_download_original":
+            # Simulate the tool writing the file at savedPath.
+            saved = Path(args["savePath"])
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            saved.write_bytes(b"fake-png")
+            return {"savedPath": str(saved), "filename": "original.png", "contentType": "image/png"}
+        raise AssertionError(f"Unexpected remote tool call: {tool_name}")
+
+    monkeypatch.setattr(tools, "_call_remote_tool", _fake_remote)
+
+    result = await tools.extract_from_photarium(
+        image_id="img_789",
+        photarium_mcp_url="http://127.0.0.1:8787",
+        namespace="cf-default",
+    )
+
+    assert result["workflow_format"] == "api"
+    assert isinstance(result.get("workflow"), dict)
+    assert result["workflow"]["1"]["class_type"] == "KSampler"
+    assert result["extraction_source"] == "photarium_download_original"
+
+
+def test_workflow_tools_recompile_updates_param_schema_and_hash(tmp_path: Path) -> None:
+    store = WorkflowStore(tmp_path)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=100_000)
+    tools = WorkflowTools(store, FakeComfyClient(), policy, extractor=FakeExtractor())
+    workflow = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"seed": 1, "steps": 4, "cfg": 1.0, "denoise": 1},
+        }
+    }
+    store.save_workflow("aspect_ratio_adjustment", workflow)
+
+    result = tools.recompile(
+        workflow_id="aspect_ratio_adjustment",
+        param_overrides=[{"name": "denoise", "type": "float", "default": 1.0}],
+    )
+
+    assert result["packaged"] is True
+    assert result["workflow_updates_applied"] == 0
+    assert result["params_overridden"] == ["denoise"]
+    params = store.read_params("aspect_ratio_adjustment") or {}
+    denoise = next(item for item in params.get("params", []) if item.get("name") == "denoise")
+    assert denoise.get("type") == "float"
+    assert denoise.get("default") == 1.0
+    assert params.get("workflow_hash") == sha256_json(workflow)
+
+
+def test_workflow_tools_recompile_updates_workflow_inputs(tmp_path: Path) -> None:
+    store = WorkflowStore(tmp_path)
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=100_000)
+    tools = WorkflowTools(store, FakeComfyClient(), policy, extractor=FakeExtractor())
+    workflow = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"seed": 1, "steps": 4, "cfg": 1.0, "denoise": 1},
+        }
+    }
+    store.save_workflow("aspect_ratio_adjustment", workflow)
+
+    result = tools.recompile(
+        workflow_id="aspect_ratio_adjustment",
+        workflow_input_updates=[{"node_id": "3", "input": "denoise", "value": 0.55}],
+    )
+
+    assert result["workflow_updates_applied"] == 1
+    updated_workflow = store.read_workflow("aspect_ratio_adjustment")
+    assert updated_workflow["3"]["inputs"]["denoise"] == 0.55
+    params = store.read_params("aspect_ratio_adjustment") or {}
+    denoise = next(item for item in params.get("params", []) if item.get("name") == "denoise")
+    assert denoise.get("type") == "float"
+    assert denoise.get("default") == 0.55
 
 
 def test_workflow_tools_save_infers_params_and_syncs_requires(tmp_path: Path) -> None:

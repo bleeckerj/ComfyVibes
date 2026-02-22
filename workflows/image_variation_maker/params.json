@@ -1,0 +1,319 @@
+{
+  "schema_version": "1",
+  "workflow_id": "image_variation_maker",
+  "workflow_hash": "5fcebad21aac1ae84a78d1c5bbf6a16c50d28ef48bb6007ca56788d41db70588",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 5555555,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "170",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 8,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "170",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "170",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 0.9,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "170",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "negative_prompt",
+      "type": "string",
+      "default": "Overexposure, static, blurred details, subtitles, paintings, pictures, still, overall gray, worst quality, low quality, JPEG compression residue, ugly, mutilated, redundant fingers, poorly painted hands, poorly painted faces, deformed, disfigured, deformed limbs, fused fingers, cluttered background, three legs, a lot of people in the background, upside down, text, letters, words",
+      "required": false,
+      "description": "CLIP Text Encode (Negative Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "117",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "euler",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "170",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "beta",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "170",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "add_lora",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "description": "Power Lora Loader (rgthree).➕ Add Lora",
+      "target": {
+        "mode": "direct",
+        "node_id": "138",
+        "input": "➕ Add Lora"
+      }
+    },
+    {
+      "name": "clip_name",
+      "type": "string",
+      "default": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "required": false,
+      "description": "Load CLIP.clip_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "110",
+        "input": "clip_name"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load CLIP.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "110",
+        "input": "device"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "127",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "default": "H74703_QwenLoRaTransceiver_d1_00001_.png",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "172",
+        "input": "image"
+      }
+    },
+    {
+      "name": "input_type",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "WanVideoNAG.input_type",
+      "target": {
+        "mode": "direct",
+        "node_id": "144",
+        "input": "input_type"
+      }
+    },
+    {
+      "name": "lora_1_lora",
+      "type": "string",
+      "default": "low_noise_model.safetensors",
+      "required": false,
+      "description": "Power Lora Loader (rgthree).lora_1.lora",
+      "target": {
+        "mode": "direct",
+        "node_id": "138",
+        "input": "lora_1",
+        "path": [
+          "lora"
+        ]
+      }
+    },
+    {
+      "name": "lora_1_on",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "description": "Power Lora Loader (rgthree).lora_1.on",
+      "target": {
+        "mode": "direct",
+        "node_id": "138",
+        "input": "lora_1",
+        "path": [
+          "on"
+        ]
+      }
+    },
+    {
+      "name": "lora_1_strength",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "Power Lora Loader (rgthree).lora_1.strength",
+      "target": {
+        "mode": "direct",
+        "node_id": "138",
+        "input": "lora_1",
+        "path": [
+          "strength"
+        ]
+      }
+    },
+    {
+      "name": "nag_alpha",
+      "type": "float",
+      "default": 0.25,
+      "required": false,
+      "description": "WanVideoNAG.nag_alpha",
+      "target": {
+        "mode": "direct",
+        "node_id": "144",
+        "input": "nag_alpha"
+      }
+    },
+    {
+      "name": "nag_scale",
+      "type": "int",
+      "default": 11,
+      "required": false,
+      "description": "WanVideoNAG.nag_scale",
+      "target": {
+        "mode": "direct",
+        "node_id": "144",
+        "input": "nag_scale"
+      }
+    },
+    {
+      "name": "nag_tau",
+      "type": "float",
+      "default": 2.5,
+      "required": false,
+      "description": "WanVideoNAG.nag_tau",
+      "target": {
+        "mode": "direct",
+        "node_id": "144",
+        "input": "nag_tau"
+      }
+    },
+    {
+      "name": "power_lora_loader_header_widget_type",
+      "type": "string",
+      "default": "PowerLoraLoaderHeaderWidget",
+      "required": false,
+      "description": "Power Lora Loader (rgthree).PowerLoraLoaderHeaderWidget.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "138",
+        "input": "PowerLoraLoaderHeaderWidget",
+        "path": [
+          "type"
+        ]
+      }
+    },
+    {
+      "name": "shift",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "ModelSamplingSD3.shift",
+      "target": {
+        "mode": "direct",
+        "node_id": "126",
+        "input": "shift"
+      }
+    },
+    {
+      "name": "string",
+      "type": "string",
+      "default": "Describe the object simply and without preamble. Identify key features and subtle attributes, including color backgroun dsetting and nuances of industrial design.",
+      "required": false,
+      "description": "Griptape Run: Image Description.STRING",
+      "target": {
+        "mode": "direct",
+        "node_id": "176",
+        "input": "STRING"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "wan",
+      "required": false,
+      "description": "Load CLIP.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "110",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",
+      "required": false,
+      "description": "Unet Loader (GGUF).unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "124",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "wan_2.1_vae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "111",
+        "input": "vae_name"
+      }
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "id": "flux_kontext_multi_image_chaining",
+  "name": "Flux Kontext Multi-Image Chaining",
+  "description": "Chain multiple reference images via ReferenceLatent to guide a Flux Kontext generation, preserving key attributes across inputs.",
+  "tags": [
+    "flux",
+    "kontext",
+    "multi-image",
+    "reference-latent",
+    "image-edit",
+    "img2img"
+  ],
+  "use_cases": [
+    "Combine multiple reference images into one cohesive generation.",
+    "Preserve key attributes from each reference via ReferenceLatent chaining."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image_1",
+      "input_image_2",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "prompt",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name1",
+      "clip_name2",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "guidance",
+      "image",
+      "image_2",
+      "megapixel",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

@@ -1,0 +1,235 @@
+{
+  "schema_version": "1",
+  "workflow_id": "flux_2_klein_4B",
+  "workflow_hash": "d0abaa9e68c36dd676299b7dadf7bfe04ff790167089a003da966f221ea0fdaf",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 134061783316951,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 4,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "Empty Flux 2 Latent.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "197",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "positive_prompt",
+      "type": "string",
+      "default": "Replace the background with a 3D cartoon snowy winter forest trail with falling snow and soft overcast light, keep the character identical and keep the same framing and scale.\n",
+      "required": false,
+      "description": "CLIP Text Encode (Positive Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "6",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "euler",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "simple",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "163",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "clip_name",
+      "type": "string",
+      "default": "qwen_3_4b.safetensors",
+      "required": false,
+      "description": "Load CLIP.clip_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "195",
+        "input": "clip_name"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load CLIP.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "195",
+        "input": "device"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "img",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "203",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "default": "BunnyExplorer.png",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "198",
+        "input": "image"
+      }
+    },
+    {
+      "name": "megapixels",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "ImageScaleToTotalPixels.megapixels",
+      "target": {
+        "mode": "direct",
+        "node_id": "199",
+        "input": "megapixels"
+      }
+    },
+    {
+      "name": "resolution_steps",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "ImageScaleToTotalPixels.resolution_steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "199",
+        "input": "resolution_steps"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "flux2",
+      "required": false,
+      "description": "Load CLIP.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "195",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "flux2\\flux-2-klein-4b-fp8.safetensors",
+      "required": false,
+      "description": "Load Diffusion Model.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "194",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "upscale_method",
+      "type": "string",
+      "default": "nearest-exact",
+      "required": false,
+      "description": "ImageScaleToTotalPixels.upscale_method",
+      "target": {
+        "mode": "direct",
+        "node_id": "199",
+        "input": "upscale_method"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "flux2-vae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "196",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load Diffusion Model.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "194",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "id": "flux_2_klein_4B_prompt_guided_image_edit",
+  "name": "Flux 2 Klein 4B Prompt-Guided Image Edit",
+  "description": "Prompt-guided image edit using Flux 2 + reference-latent conditioning. Note: this workflow samples from an empty latent, so denoise=0 will look like a blank/gray image. For classic img2img variations (latent-init), use flux_2_klein_4B_variations.",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "sampler",
+    "flux",
+    "upscaling"
+  ],
+  "use_cases": [
+    "Modify an existing image while preserving composition.",
+    "Increase output resolution while retaining style."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "device",
+      "filename_prefix",
+      "image",
+      "megapixels",
+      "resolution_steps",
+      "type",
+      "unet_name",
+      "upscale_method",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

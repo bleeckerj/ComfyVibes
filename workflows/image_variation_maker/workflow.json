@@ -1,0 +1,245 @@
+{
+  "110": {
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "111": {
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "112": {
+    "inputs": {
+      "text": [
+        "176",
+        0
+      ],
+      "clip": [
+        "138",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "115": {
+    "inputs": {
+      "samples": [
+        "170",
+        0
+      ],
+      "vae": [
+        "111",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "117": {
+    "inputs": {
+      "text": "Overexposure, static, blurred details, subtitles, paintings, pictures, still, overall gray, worst quality, low quality, JPEG compression residue, ugly, mutilated, redundant fingers, poorly painted hands, poorly painted faces, deformed, disfigured, deformed limbs, fused fingers, cluttered background, three legs, a lot of people in the background, upside down, text, letters, words",
+      "clip": [
+        "138",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "124": {
+    "inputs": {
+      "unet_name": "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "Unet Loader (GGUF)"
+    }
+  },
+  "126": {
+    "inputs": {
+      "shift": 1,
+      "model": [
+        "144",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "ModelSamplingSD3"
+    }
+  },
+  "127": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "115",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "138": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "low_noise_model.safetensors",
+        "strength": 1
+      },
+      "➕ Add Lora": "",
+      "model": [
+        "124",
+        0
+      ],
+      "clip": [
+        "110",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "144": {
+    "inputs": {
+      "nag_scale": 11,
+      "nag_alpha": 0.25,
+      "nag_tau": 2.5,
+      "input_type": "default",
+      "model": [
+        "138",
+        0
+      ],
+      "conditioning": [
+        "117",
+        0
+      ]
+    },
+    "class_type": "WanVideoNAG",
+    "_meta": {
+      "title": "WanVideoNAG"
+    }
+  },
+  "170": {
+    "inputs": {
+      "seed": 5555555,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "beta",
+      "denoise": 0.9,
+      "model": [
+        "126",
+        0
+      ],
+      "positive": [
+        "112",
+        0
+      ],
+      "negative": [
+        "117",
+        0
+      ],
+      "latent_image": [
+        "173",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "172": {
+    "inputs": {
+      "image": "H74703_QwenLoRaTransceiver_d1_00001_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "173": {
+    "inputs": {
+      "pixels": [
+        "172",
+        0
+      ],
+      "vae": [
+        "111",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "174": {
+    "inputs": {
+      "rgthree_comparer": {
+        "images": [
+          {
+            "name": "A",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_loiky_00003_.png&type=temp&subfolder=&rand=0.19914906019580192"
+          },
+          {
+            "name": "B",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_loiky_00004_.png&type=temp&subfolder=&rand=0.5094770767082638"
+          }
+        ]
+      },
+      "image_a": [
+        "172",
+        0
+      ],
+      "image_b": [
+        "115",
+        0
+      ]
+    },
+    "class_type": "Image Comparer (rgthree)",
+    "_meta": {
+      "title": "Image Comparer (rgthree)"
+    }
+  },
+  "176": {
+    "inputs": {
+      "STRING": "Describe the object simply and without preamble. Identify key features and subtle attributes, including color backgroun dsetting and nuances of industrial design.",
+      "image": [
+        "172",
+        0
+      ]
+    },
+    "class_type": "Griptape Run: Image Description",
+    "_meta": {
+      "title": "Griptape Run: Image Description"
+    }
+  }
+}

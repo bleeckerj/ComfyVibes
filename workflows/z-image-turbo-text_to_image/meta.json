@@ -1,0 +1,52 @@
+{
+  "id": "z-image-turbo-text_to_image",
+  "name": "Z-Image Turbo Text to Image",
+  "description": "Text-to-image generation with Z-Image (Turbo, bf16).",
+  "tags": [
+    "text-to-image",
+    "z-image",
+    "turbo",
+    "bf16"
+  ],
+  "use_cases": [
+    "Generate images from a text prompt using Z-Image Turbo.",
+    "Text to image generation with efficient performance and reduced memory usage using bf16 precision."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "width",
+      "batch_size",
+      "prompt",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "device",
+      "filename_prefix",
+      "shift",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

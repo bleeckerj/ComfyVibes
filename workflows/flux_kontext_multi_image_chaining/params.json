@@ -1,0 +1,295 @@
+{
+  "schema_version": "1",
+  "workflow_id": "flux_kontext_multi_image_chaining",
+  "workflow_hash": "f2fb7a879b8da9022974fe7265cd181d7edb0c9e16bd697f22aa0d1c1334b186",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 436783164254617,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 25,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "EmptySD3LatentImage.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "19",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "The mech robot integrates the optical recognition devivce as an additional articulated element of its robotic form  as its \"head\". The optical recognition camera is oriented corectly, not angled as if this element is part of its mechanical form.",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "33",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "euler",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "beta",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "4:5 (Artistic Frame)",
+      "required": false,
+      "description": "Flux Resolution Calc.aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "aspect_ratio"
+      }
+    },
+    {
+      "name": "clip_name1",
+      "type": "string",
+      "default": "t5xxl_fp16.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name1",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "clip_name1"
+      }
+    },
+    {
+      "name": "clip_name2",
+      "type": "string",
+      "default": "clip_l.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name2",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "clip_name2"
+      }
+    },
+    {
+      "name": "custom_aspect_ratio",
+      "type": "string",
+      "default": "1:1",
+      "required": false,
+      "description": "Flux Resolution Calc.custom_aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "custom_aspect_ratio"
+      }
+    },
+    {
+      "name": "custom_ratio",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "Flux Resolution Calc.custom_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "custom_ratio"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "DualCLIPLoader.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "device"
+      }
+    },
+    {
+      "name": "divisible_by",
+      "type": "string",
+      "default": "64",
+      "required": false,
+      "description": "Flux Resolution Calc.divisible_by",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "divisible_by"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "21",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "guidance",
+      "type": "int",
+      "default": 2,
+      "required": false,
+      "description": "FluxGuidance.guidance",
+      "target": {
+        "mode": "direct",
+        "node_id": "32",
+        "input": "guidance"
+      }
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "default": "JPEG image-4704-A3D5-A8-0.jpeg",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "2",
+        "input": "image"
+      }
+    },
+    {
+      "name": "image_2",
+      "type": "string",
+      "default": "JPEG image-4CE6-A05E-24-0.jpeg",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "image"
+      }
+    },
+    {
+      "name": "megapixel",
+      "type": "string",
+      "default": "1.0",
+      "required": false,
+      "description": "Flux Resolution Calc.megapixel",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "megapixel"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "flux",
+      "required": false,
+      "description": "DualCLIPLoader.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "flux1-dev-kontext_fp8_scaled.safetensors",
+      "required": false,
+      "description": "Load Diffusion Model.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "36",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "ae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "11",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load Diffusion Model.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "36",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

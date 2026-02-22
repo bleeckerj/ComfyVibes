@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from comfy_mcp.config.load_config import load_config
 from comfy_mcp.config.models import AppConfig
+from comfy_mcp.mcp_server.runtime_info import collect_runtime_info
 from comfy_mcp.mcp_server.server import build_tool_registry, _tool_to_payload
 
 
@@ -47,12 +48,27 @@ def _extract_arguments(payload: Any) -> Dict[str, Any]:
 def create_http_app(config: AppConfig) -> FastAPI:
     tool_defs, handlers = build_tool_registry(config)
     tool_lookup = {getattr(tool, "name", None): tool for tool in tool_defs}
+    runtime_info = collect_runtime_info(service_name="comfy-mcp-http")
 
-    app = FastAPI(title="Comfy MCP HTTP Proxy", version="0.1.0")
+    app = FastAPI(
+        title="Comfy MCP HTTP Proxy",
+        version=str(runtime_info.get("service_version") or "0.0.0+unknown"),
+    )
 
     @app.get("/health")
-    async def health() -> Dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> Dict[str, Any]:
+        return {
+            "status": "ok",
+            **runtime_info,
+            "tool_count": len(tool_defs),
+        }
+
+    @app.get("/version")
+    async def version() -> Dict[str, Any]:
+        return {
+            **runtime_info,
+            "tool_count": len(tool_defs),
+        }
 
     @app.get("/tools")
     async def list_tools() -> Dict[str, Any]:

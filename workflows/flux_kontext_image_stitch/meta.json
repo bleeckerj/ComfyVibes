@@ -1,0 +1,47 @@
+{
+  "id": "flux_kontext_image_stitch",
+  "name": "Flux Kontext Image Stitch",
+  "description": "Stitch and combine images using FluxKontextMax. Takes input images and produces a combined/stitched output.",
+  "tags": [
+    "image-stitch",
+    "kontext",
+    "flux",
+    "combine"
+  ],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "prompt",
+      "aspect_ratio",
+      "direction",
+      "filename_prefix",
+      "guidance",
+      "image",
+      "match_image_size",
+      "prompt_upsampling",
+      "spacing_color",
+      "spacing_width"
+    ]
+  },
+  "use_cases": [
+    "Run this workflow with parameter overrides via MCP."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": []
+}

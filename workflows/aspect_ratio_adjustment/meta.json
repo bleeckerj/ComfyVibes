@@ -1,7 +1,7 @@
 {
   "id": "aspect_ratio_adjustment",
   "name": "Aspect Ratio Adjustment",
-  "description": "Changes the aspect ratio of an image using AI-powered outpainting/cropping. Requires input image and target aspect ratio (e.g. 16:9, 1:1, 4:3).",
+  "description": "Changes the aspect ratio of an image using AI-powered outpainting/cropping. Samples on an empty-latent canvas with image conditioning (not latent-init img2img), so denoise=0 will look like a blank/gray image; use higher denoise for generation. Requires input image and target aspect ratio (e.g. 16:9, 1:1, 4:3).",
   "tags": [
     "aspect-ratio",
     "resize",

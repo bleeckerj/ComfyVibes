@@ -1,0 +1,63 @@
+{
+  "id": "good_80s_8bit_maker",
+  "name": "Good 80s 8-Bit Maker",
+  "description": "Image-to-image conversion to a 1980s-style 8-bit/pixel-art aesthetic.",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "8-bit",
+    "pixel-art",
+    "retro",
+    "dither",
+    "aesthetic",
+    "image to image"
+  ],
+  "use_cases": [
+    "Transform a source image into retro 8-bit pixel art."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "image",
+      "megapixel",
+      "megapixels",
+      "resolution_steps",
+      "type",
+      "unet_name",
+      "upscale_method",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

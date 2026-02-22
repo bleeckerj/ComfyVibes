@@ -367,8 +367,9 @@ ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interact
 | `workflows_run` | Run a workflow with parameter overrides via ComfyUI. Supports `force` to bypass caching and `client_id` for tracking. |
 | `workflows_wait` | Wait for a prompt to appear in ComfyUI history. Configurable `timeout_s` and `poll_ms`. |
 | `workflows_extract_from_artifact` | Extract an embedded workflow from a ComfyUI-generated image or video artifact (PNG, WebP, MP4, etc.). |
+| `workflows_extract_from_photarium` | Extract a workflow for a Photarium image id, falling back to downloading the original artifact when derived JPEG variants lack embedded metadata. |
 | `workflows_import_from_artifact` | Extract a workflow from an artifact and save it directly to the workflow store with name, tags, and metadata. |
-| `workflows_import_from_photarium` | Pull a Photarium image workflow (`photarium_extract_workflow`) and save it to the workflow corpus. |
+| `workflows_import_from_photarium` | Pull a Photarium image workflow and save it to the workflow corpus (falls back to Photarium extras or original artifact download when needed). |
 | `workflows_run_aspect_ratio_adjustment` | Upload an image, set aspect ratio, and run the aspect ratio adjustment workflow. Supports positive/negative prompts, seed, and output naming. |
 
 ---

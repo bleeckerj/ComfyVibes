@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from comfy_mcp.tui_client.search_semantics import normalize_search_tool_result
+from comfy_mcp.tui_client.search_semantics import (
+    normalize_binary_transfer_arguments,
+    normalize_photarium_upload_arguments,
+    normalize_search_tool_result,
+)
 
 
 def test_normalize_search_result_prefers_canonical_nested_uuid_over_display_id() -> None:
@@ -51,3 +55,172 @@ def test_normalize_search_result_handles_catalog_semantic_search_tool_variant() 
     assert normalized["primary_image_id"] == "img_001"
     assert normalized["matches"][0]["image_id"] == "img_001"
     assert normalized["matches"][1]["image_id"] == "img_002"
+
+
+def test_normalize_photarium_upload_arguments_sets_camelcase_name_from_description() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string"},
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+        },
+    }
+    args = {
+        "url": "http://127.0.0.1:8188/view?filename=ComfyUI_00123_.png&type=output",
+        "description": "editorial leather jacket campaign image",
+    }
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_url", args, schema)
+
+    assert normalized["name"] == "EditorialLeatherJacketCampaign"
+
+
+def test_normalize_photarium_upload_arguments_does_not_use_view_url_filename_for_name() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string"},
+            "title": {"type": "string"},
+        },
+    }
+    args = {
+        "url": (
+            "http://127.0.0.1:8188/view?"
+            "filename=NeonCityStreetRainReflections__4x5__s7__a1b2c3d4_00001_.png&type=output"
+        )
+    }
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_url", args, schema)
+
+    assert normalized["title"] == "NeonCityStreetRainReflections"
+
+
+def test_normalize_photarium_upload_arguments_sanitizes_existing_non_blob_name() -> None:
+    args = {
+        "name": "  my cool-image!!! (v2)  ",
+        "description": "shiny chrome robot portrait",
+    }
+    schema = {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}}}
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_from_path", args, schema)
+
+    assert normalized["name"] == "MyCoolImageV2"
+
+
+def test_normalize_photarium_upload_arguments_does_not_inject_unknown_name_field() -> None:
+    args = {"url": "http://127.0.0.1:8188/view?filename=DesertEditorialScene.png&type=output"}
+    schema = {"type": "object", "properties": {"url": {"type": "string"}}}
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_url", args, schema)
+
+    assert "name" not in normalized
+    assert "title" not in normalized
+
+
+def test_normalize_photarium_upload_arguments_sanitizes_query_blob_name_value() -> None:
+    args = {
+        "name": "view_filename=edited_transl.png&type=output&subfolder=2026-02-20",
+    }
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_from_path", args, schema)
+
+    assert normalized["name"] == "EditedTransl"
+
+
+def test_normalize_photarium_upload_arguments_can_use_fallback_text_when_no_semantic_fields() -> None:
+    args = {"name": "type=output&subfolder=2026-02-20"}
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+    normalized = normalize_photarium_upload_arguments(
+        "photarium_upload_from_path",
+        args,
+        schema,
+        fallback_text="editorial portrait in neon rain",
+    )
+
+    assert normalized["name"] == "EditorialPortraitNeonRain"
+
+
+def test_normalize_photarium_upload_arguments_rewrites_blob_in_immutable_filename_field() -> None:
+    args = {"immutable_filename": "view_filename=futuristic_of.png&type=output&subfolder=2026-02-20"}
+    schema = {"type": "object", "properties": {"immutable_filename": {"type": "string"}}}
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_from_path", args, schema)
+
+    assert normalized["immutable_filename"] == "FuturisticOf"
+
+
+def test_normalize_photarium_upload_arguments_populates_name_and_immutable_when_schema_supports_both() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string"},
+            "name": {"type": "string"},
+            "immutable_filename": {"type": "string"},
+        },
+    }
+    args = {
+        "url": "http://127.0.0.1:8188/view?filename=CleanBlueVehicle_00001_.png&type=output&subfolder=2026-02-20"
+    }
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_url", args, schema)
+
+    assert normalized["name"] == "CleanBlueVehicle"
+    assert normalized["immutable_filename"] == "CleanBlueVehicle"
+
+
+def test_normalize_photarium_upload_arguments_overwrites_existing_immutable_filename() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "immutable_filename": {"type": "string"},
+            "description": {"type": "string"},
+        },
+    }
+    args = {
+        "name": "ValidDisplayName",
+        "immutable_filename": "legacy_bad_value",
+        "description": "electric blue vehicle concept",
+    }
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_from_path", args, schema)
+
+    assert normalized["name"] == "ValidDisplayName"
+    assert normalized["immutable_filename"] == "ValidDisplayName"
+
+
+def test_normalize_binary_transfer_arguments_disables_import_include_data_by_default() -> None:
+    args = {
+        "url": "http://127.0.0.1:8188/view?filename=Sample_00001_.png&type=output",
+        "includeData": True,
+    }
+
+    normalized = normalize_binary_transfer_arguments("photarium_import_url", args, fallback_text="upload this image")
+
+    assert normalized["includeData"] is False
+
+
+def test_normalize_binary_transfer_arguments_keeps_import_include_data_when_explicitly_requested() -> None:
+    args = {
+        "url": "http://127.0.0.1:8188/view?filename=Sample_00001_.png&type=output",
+        "includeData": True,
+    }
+
+    normalized = normalize_binary_transfer_arguments(
+        "photarium_import_url",
+        args,
+        fallback_text="Use includeData=true and return base64 data URL",
+    )
+
+    assert normalized["includeData"] is True
+
+
+def test_normalize_binary_transfer_arguments_disables_download_include_base64_by_default() -> None:
+    args = {"imageId": "abc123", "includeBase64": True}
+
+    normalized = normalize_binary_transfer_arguments("photarium_download_image", args, fallback_text="download file")
+
+    assert normalized["includeBase64"] is False

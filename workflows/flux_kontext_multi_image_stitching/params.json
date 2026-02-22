@@ -1,0 +1,415 @@
+{
+  "schema_version": "1",
+  "workflow_id": "flux_kontext_multi_image_stitching",
+  "workflow_hash": "4e33b2373f6808a15aedb56d597a2045af632777817654b3b0730649dacd35a3",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 192268037104283,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 20,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "height",
+      "type": "int",
+      "default": 0,
+      "required": false,
+      "description": "Image_Resizer.height",
+      "target": {
+        "mode": "direct",
+        "node_id": "29",
+        "input": "height"
+      }
+    },
+    {
+      "name": "height_2",
+      "type": "int",
+      "default": 0,
+      "required": false,
+      "description": "Image_Resizer.height",
+      "target": {
+        "mode": "direct",
+        "node_id": "30",
+        "input": "height"
+      }
+    },
+    {
+      "name": "width",
+      "type": "int",
+      "default": 0,
+      "required": false,
+      "description": "Image_Resizer.width",
+      "target": {
+        "mode": "direct",
+        "node_id": "29",
+        "input": "width"
+      }
+    },
+    {
+      "name": "width_2",
+      "type": "int",
+      "default": 0,
+      "required": false,
+      "description": "Image_Resizer.width",
+      "target": {
+        "mode": "direct",
+        "node_id": "30",
+        "input": "width"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "EmptySD3LatentImage.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "19",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "From the provided reference images, create a unified, cohesive image such that the woman is wearing the pink headphones. Maintain the identity and characteristics of each subject while adjusting their proportions, scale, and positioning to create a harmonious, naturally balanced composition. Blend and integrate all elements seamlessly with consistent lighting, perspective, and style.the final result should look like a single naturally captured scene where all subjects are properly sized and positioned relative to each other, not assembled from multiple sources",
+      "required": false,
+      "description": "CLIPTextEncode.text",
+      "target": {
+        "mode": "direct",
+        "node_id": "14",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "euler",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "normal",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "1:1 (Perfect Square)",
+      "required": false,
+      "description": "FluxResolutionNode.aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "aspect_ratio"
+      }
+    },
+    {
+      "name": "clip_name1",
+      "type": "string",
+      "default": "t5xxl_fp8_e4m3fn.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name1",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "clip_name1"
+      }
+    },
+    {
+      "name": "clip_name2",
+      "type": "string",
+      "default": "clip_l.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name2",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "clip_name2"
+      }
+    },
+    {
+      "name": "custom_aspect_ratio",
+      "type": "string",
+      "default": "1:1",
+      "required": false,
+      "description": "FluxResolutionNode.custom_aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "custom_aspect_ratio"
+      }
+    },
+    {
+      "name": "custom_ratio",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "FluxResolutionNode.custom_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "custom_ratio"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "DualCLIPLoader.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "device"
+      }
+    },
+    {
+      "name": "direction",
+      "type": "string",
+      "default": "right",
+      "required": false,
+      "description": "ImageStitch.direction",
+      "target": {
+        "mode": "direct",
+        "node_id": "22",
+        "input": "direction"
+      }
+    },
+    {
+      "name": "divisible_by",
+      "type": "string",
+      "default": "64",
+      "required": false,
+      "description": "FluxResolutionNode.divisible_by",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "divisible_by"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "SaveImage.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "21",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "guidance",
+      "type": "int",
+      "default": 2,
+      "required": false,
+      "description": "FluxGuidance.guidance",
+      "target": {
+        "mode": "direct",
+        "node_id": "17",
+        "input": "guidance"
+      }
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "default": "H0b939b19ecbb442193058c0765e26f83P.png",
+      "required": false,
+      "description": "LoadImage.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "2",
+        "input": "image"
+      }
+    },
+    {
+      "name": "image_2",
+      "type": "string",
+      "default": "text-to-image-output-U7xZdSm7f9.png",
+      "required": false,
+      "description": "LoadImage.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "image"
+      }
+    },
+    {
+      "name": "keep_proportion",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "description": "Image_Resizer.keep_proportion",
+      "target": {
+        "mode": "direct",
+        "node_id": "29",
+        "input": "keep_proportion"
+      }
+    },
+    {
+      "name": "keep_proportion_2",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "description": "Image_Resizer.keep_proportion",
+      "target": {
+        "mode": "direct",
+        "node_id": "30",
+        "input": "keep_proportion"
+      }
+    },
+    {
+      "name": "match_image_size",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "ImageStitch.match_image_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "22",
+        "input": "match_image_size"
+      }
+    },
+    {
+      "name": "megapixel",
+      "type": "string",
+      "default": "0.8",
+      "required": false,
+      "description": "FluxResolutionNode.megapixel",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "megapixel"
+      }
+    },
+    {
+      "name": "spacing_color",
+      "type": "string",
+      "default": "white",
+      "required": false,
+      "description": "ImageStitch.spacing_color",
+      "target": {
+        "mode": "direct",
+        "node_id": "22",
+        "input": "spacing_color"
+      }
+    },
+    {
+      "name": "spacing_width",
+      "type": "int",
+      "default": 0,
+      "required": false,
+      "description": "ImageStitch.spacing_width",
+      "target": {
+        "mode": "direct",
+        "node_id": "22",
+        "input": "spacing_width"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "flux",
+      "required": false,
+      "description": "DualCLIPLoader.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "flux1-dev-kontext_fp8_scaled.safetensors",
+      "required": false,
+      "description": "UNETLoader.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "31",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "ae.safetensors",
+      "required": false,
+      "description": "VAELoader.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "11",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "UNETLoader.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "31",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

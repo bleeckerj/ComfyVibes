@@ -100,6 +100,38 @@ class HTTPToolRouter:
     def list_tool_specs(self) -> List[ToolSpec]:
         return list(self._tool_specs)
 
+    async def get_server_health_statuses(self) -> List[Dict[str, Any]]:
+        """Return per-server health payloads for startup diagnostics display."""
+        statuses: List[Dict[str, Any]] = []
+        if self._client is None:
+            return statuses
+
+        for state in self._server_states:
+            url = f"{state.base_url}/health"
+            entry: Dict[str, Any] = {
+                "name": state.name,
+                "base_url": state.base_url,
+                "health_url": url,
+                "ok": False,
+                "status_code": None,
+                "payload": None,
+                "error": None,
+            }
+            try:
+                resp = await self._client.get(url)
+                entry["status_code"] = resp.status_code
+                entry["ok"] = resp.status_code < 400
+                try:
+                    payload = resp.json()
+                except Exception:
+                    payload = {"raw_text": resp.text} if resp.text else {}
+                entry["payload"] = payload if isinstance(payload, dict) else {"payload": payload}
+            except Exception as exc:
+                entry["error"] = str(exc)
+            statuses.append(entry)
+
+        return statuses
+
     async def call_tool(self, name: str, arguments: Dict[str, Any] | None) -> Any:
         state = self._tool_map.get(name)
         if state is None:
@@ -131,7 +163,22 @@ class HTTPToolRouter:
         # Unwrap the {ok, result} envelope from the HTTP proxy
         if isinstance(payload, dict) and "ok" in payload:
             if not payload.get("ok"):
-                raise RuntimeError(str(payload.get("error", "Tool call failed")))
+                message = str(payload.get("error") or payload.get("detail") or "").strip()
+                if not message:
+                    result_payload = payload.get("result")
+                    if isinstance(result_payload, dict):
+                        nested_error = result_payload.get("error")
+                        if isinstance(nested_error, str) and nested_error.strip():
+                            message = nested_error.strip()
+                        elif result_payload.get("isError"):
+                            content = result_payload.get("content")
+                            if isinstance(content, list) and content:
+                                first = content[0]
+                                if isinstance(first, dict):
+                                    text = first.get("text")
+                                    if isinstance(text, str) and text.strip():
+                                        message = text.strip()
+                raise RuntimeError(message or "Tool call failed")
             return payload.get("result")
 
         return payload

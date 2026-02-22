@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "workflow_id": "pink_metallic_workflow",
-  "workflow_hash": "fe05d2c4c0af45498a98cb05807225743fca2962dd7531e2231678d395088e76",
+  "workflow_hash": "da140cb096a729adaaaa605f3078906785eb0f575302c4044bf8cfea2b333ff2",
   "params": [
     {
       "name": "seed",
@@ -41,8 +41,8 @@
     },
     {
       "name": "denoise",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "KSampler.denoise",
       "target": {
