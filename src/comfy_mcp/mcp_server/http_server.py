@@ -33,6 +33,42 @@ def _inject_token(handler: Any, args: Dict[str, Any], request: Request) -> Dict[
     return args
 
 
+def _filter_supported_kwargs(handler: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop unexpected kwargs unless handler explicitly accepts **kwargs."""
+    signature = inspect.signature(handler)
+    parameters = signature.parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return kwargs
+    allowed = {
+        name
+        for name, parameter in signature.parameters.items()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    camel_aliases = {
+        "".join(part.capitalize() if index else part for index, part in enumerate(name.split("_"))): name
+        for name in allowed
+        if "_" in name
+    }
+
+    def _merge_supported_values(source: Dict[str, Any], target: Dict[str, Any]) -> None:
+        for key, value in source.items():
+            if key in allowed and key not in target:
+                target[key] = value
+                continue
+            alias = camel_aliases.get(key)
+            if alias and alias not in target:
+                target[alias] = value
+
+    normalized = dict(kwargs)
+    _merge_supported_values(kwargs, normalized)
+    for wrapper_key in ("arguments", "args", "input", "payload", "params"):
+        wrapped = kwargs.get(wrapper_key)
+        if not isinstance(wrapped, dict):
+            continue
+        _merge_supported_values(wrapped, normalized)
+    return {key: value for key, value in normalized.items() if key in allowed}
+
+
 def _extract_arguments(payload: Any) -> Dict[str, Any]:
     if payload is None:
         return {}
@@ -88,6 +124,7 @@ def create_http_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {name}")
         args = _extract_arguments(body)
         args = _inject_token(handler, args, request)
+        args = _filter_supported_kwargs(handler, args)
         try:
             if inspect.iscoroutinefunction(handler):
                 result = await handler(**args)
@@ -109,6 +146,7 @@ def create_http_app(config: AppConfig) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {name}")
         args = _extract_arguments(body.get("arguments"))
         args = _inject_token(handler, args, request)
+        args = _filter_supported_kwargs(handler, args)
         try:
             if inspect.iscoroutinefunction(handler):
                 result = await handler(**args)

@@ -78,6 +78,12 @@ class HTTPToolRouter:
                     description=raw.get("description", ""),
                     input_schema=raw.get("inputSchema", {}) or {},
                 )
+
+                # Honor per-server prefix filters from config so shared helper
+                # tool names (e.g. list_tools) don't collide across servers.
+                if server.tool_prefixes:
+                    if not any(spec.name.startswith(prefix) for prefix in server.tool_prefixes):
+                        continue
                 tools.append(spec)
 
             state = _HTTPServerState(
@@ -157,7 +163,7 @@ class HTTPToolRouter:
             except Exception:
                 if resp.text:
                     message = f"{message}: {resp.text}"
-            raise RuntimeError(message)
+            raise RuntimeError(self._enrich_tool_error(name=name, arguments=arguments, message=message))
         payload = resp.json() if resp.content else {}
 
         # Unwrap the {ok, result} envelope from the HTTP proxy
@@ -182,3 +188,17 @@ class HTTPToolRouter:
             return payload.get("result")
 
         return payload
+
+    @staticmethod
+    def _enrich_tool_error(name: str, arguments: Dict[str, Any] | None, message: str) -> str:
+        if name != "workflows_run":
+            return message
+        if not isinstance(arguments, dict) or "overrides" in arguments:
+            return message
+        lower = message.lower()
+        if "override" not in lower and "required" not in lower and "missing" not in lower:
+            return message
+        return (
+            f"{message}. Fix: call workflows_run with an explicit overrides object, "
+            'for example {"workflow_id":"<id>","overrides":{...}}'
+        )

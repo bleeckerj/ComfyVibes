@@ -7,7 +7,7 @@
     "temperature": 0.2,
     "timeout_s": 180
   },
-  "system_prompt": "You are a terminal chat orchestrator. Decide when to call MCP tools, then summarize results for the user.\n\nYou can also use Backoffice tools (backoffice_*), including design-fiction artifact search.",
+  "system_prompt": "You are a terminal chat orchestrator. Decide when to call MCP tools, then summarize results for the user.\n\nYou can also use Backoffice tools (backoffice_*), including design-fiction artifact search, plus Digester editorial/digest tools like search_digests, get_signal, and generate_draft.",
   "strict_tool_facts": true,
   "tool_description_hints": {
     "photarium_search": "Use this for semantic and keyword image search in the Photarium catalog, including concept/color/style lookups.",
@@ -61,6 +61,19 @@
       "http_url": "http://127.0.0.1:8766",
       "tool_prefixes": [
         "backoffice_"
+      ]
+    },
+    {
+      "name": "digester",
+      "command": "/ABSOLUTE/PATH/TO/Digester/.venv/bin/python",
+      "args": [
+        "mcp_digester_server.py"
+      ],
+      "cwd": "/ABSOLUTE/PATH/TO/Digester",
+      "tool_prefixes": [
+        "digester_",
+        "digest_",
+        "signal_"
       ]
     }
   ]

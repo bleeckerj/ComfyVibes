@@ -114,7 +114,7 @@
     {
       "name": "aspect_ratio",
       "type": "string",
-      "default": "21:9 (Epic Ultrawide)",
+      "default": "4:5 (Artistic Frame)",
       "required": false,
       "description": "Flux Resolution Calc.aspect_ratio",
       "target": {

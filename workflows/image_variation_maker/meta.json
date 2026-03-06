@@ -1,8 +1,10 @@
 {
   "id": "image_variation_maker",
   "name": "Image Variation Maker with Image Analysis Instructions",
-  "description": "Img2img variation workflow that uses image analysis instructions to guide the input image using a vision model. The user supplies image_analysis_instructions to steer the caption; the caption becomes the positive prompt. denoise controls similarity (0 preserves, 1 regenerates).",
+  "description": "This workflow is useful for making variations of an existing image and should be offered when asking for variations. Img2img variation workflow that uses image analysis instructions to guide the input image using a vision model. The user supplies image_analysis_instructions to steer the caption; the caption becomes the positive prompt. denoise controls similarity (0 preserves, 1 regenerates).",
   "tags": [
+    "variation",
+    "variant",
     "image-edit",
     "img2img",
     "variations",
@@ -26,7 +28,7 @@
   ],
   "style": [],
   "mood": [],
-  "notes": "User-facing image_analysis_instructions maps to the Griptape STRING input; its output becomes the positive prompt. negative_prompt and denoise are optional overrides with defaults in the workflow.",
+  "notes": "User-facing image_analysis_instructions maps to the Griptape STRING input; its output becomes the positive prompt. negative_prompt and denoise are optional overrides with defaults in the workflow. If uploading to Photarium, also set the image metadata prompt to the resolved positive prompt (or fall back to image_analysis_instructions).",
   "io_contract": {
     "inputs": [
       "input_image",

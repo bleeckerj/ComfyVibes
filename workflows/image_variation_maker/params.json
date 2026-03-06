@@ -270,7 +270,7 @@
     {
       "name": "string",
       "type": "string",
-      "default": "Describe the object simply and without preamble. Identify key features and subtle attributes, including color backgroun dsetting and nuances of industrial design.",
+      "default": "Describe the scene simply and without preamble. Identify key features and subtle attributes, including color backgroun dsetting and nuances of industrial design.",
       "required": false,
       "description": "Griptape Run: Image Description.STRING",
       "target": {

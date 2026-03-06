@@ -8,12 +8,14 @@ import json
 import os
 import platform
 import re
+import secrets
 import subprocess
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal
 
+from rich.markup import escape as rich_markup_escape
 from textual.app import App, ComposeResult
 from textual import events
 from textual.driver import Driver
@@ -24,7 +26,9 @@ from comfy_mcp.tui_client.llm_client import OpenAIClient
 from comfy_mcp.tui_client.orchestrator import ChatOrchestrator
 from comfy_mcp.tui_client.mcp_router import MCPToolRouter
 from comfy_mcp.tui_client.http_router import HTTPToolRouter
+from comfy_mcp.tui_client.hybrid_router import HybridToolRouter
 from comfy_mcp.tui_client.sanitize import sanitize_result
+from comfy_mcp.tui_client.workflows_schema import ensure_workflows_run_schema
 
 try:
     from textual.drivers.linux_driver import LinuxDriver as _TextualLinuxDriver
@@ -63,7 +67,7 @@ class HistoryTextArea(TextArea):
 
     async def _on_key(self, event: events.Key) -> None:
         logger = getattr(self.app, "_key_debug_write", None)
-        if callable(logger):
+        if callable(logger) and bool(getattr(self.app, "_key_debug_enabled", False)):
             logger(
                 "input_key",
                 key=event.key,
@@ -73,17 +77,6 @@ class HistoryTextArea(TextArea):
                 is_repeat=getattr(event, "is_repeat", None),
             )
         await super()._on_key(event)
-
-    def on_focus(self, event: events.Focus) -> None:
-        logger = getattr(self.app, "_key_debug_write", None)
-        if callable(logger):
-            logger("input_focus")
-
-    def on_blur(self, event: events.Blur) -> None:
-        logger = getattr(self.app, "_key_debug_write", None)
-        if callable(logger):
-            logger("input_blur")
-
 
 class PassiveRichLog(RichLog):
     """Log pane that won't steal keyboard focus from the input composer."""
@@ -145,6 +138,91 @@ def _strip_border_glyphs(text: str) -> str:
         line = re.sub(r"\s*[▁▂▃▄▅▆▇█]?\s*[│┃║]\s*[▁▂▃▄▅▆▇█]?$", "", line)
         cleaned_lines.append(line)
     return "\n".join(cleaned_lines)
+
+
+def _normalize_openai_tool_schema(schema: Any) -> Dict[str, Any]:
+    """Normalize MCP-provided JSON schema into OpenAI-compatible function parameters."""
+
+    def _includes_type(node_type: Any, expected: str) -> bool:
+        if isinstance(node_type, str):
+            return node_type == expected
+        if isinstance(node_type, list):
+            return expected in node_type
+        return False
+
+    def _normalize_node(node: Any) -> Any:
+        if not isinstance(node, dict):
+            return node
+
+        normalized: Dict[str, Any] = {}
+        for key, value in node.items():
+            if key in {"properties", "$defs", "definitions", "patternProperties", "dependentSchemas"}:
+                if isinstance(value, dict):
+                    normalized[key] = {
+                        str(child_key): _normalize_node(child_value)
+                        for child_key, child_value in value.items()
+                    }
+                else:
+                    normalized[key] = {}
+                continue
+
+            if key in {"allOf", "anyOf", "oneOf", "prefixItems"}:
+                if isinstance(value, list):
+                    normalized[key] = [
+                        _normalize_node(entry) if isinstance(entry, dict) else {}
+                        for entry in value
+                    ]
+                continue
+
+            if key in {"items", "contains", "if", "then", "else", "not", "propertyNames"}:
+                if isinstance(value, dict):
+                    normalized[key] = _normalize_node(value)
+                elif key == "items" and isinstance(value, list):
+                    normalized[key] = [
+                        _normalize_node(entry) if isinstance(entry, dict) else {}
+                        for entry in value
+                    ]
+                continue
+
+            if key in {"additionalProperties", "unevaluatedProperties"}:
+                if isinstance(value, bool):
+                    normalized[key] = value
+                elif isinstance(value, dict):
+                    normalized[key] = _normalize_node(value)
+                continue
+
+            if key == "unevaluatedItems":
+                if isinstance(value, bool):
+                    normalized[key] = value
+                elif isinstance(value, dict):
+                    normalized[key] = _normalize_node(value)
+                continue
+
+            if key == "required":
+                if isinstance(value, list):
+                    normalized[key] = [item for item in value if isinstance(item, str)]
+                continue
+
+            normalized[key] = value
+
+        node_type = normalized.get("type")
+        is_object = _includes_type(node_type, "object")
+        is_array = _includes_type(node_type, "array")
+
+        if is_object and "properties" in normalized and not isinstance(normalized.get("properties"), dict):
+            normalized["properties"] = {}
+
+        if is_array and "items" not in normalized:
+            normalized["items"] = {}
+
+        return normalized
+
+    if not isinstance(schema, dict):
+        return {"type": "object", "properties": {}}
+    normalized_schema = _normalize_node(schema)
+    if not isinstance(normalized_schema, dict):
+        return {"type": "object", "properties": {}}
+    return normalized_schema
 
 
 def _format_editorial_ads_inventory_lines(result: Any) -> List[str] | None:
@@ -247,18 +325,24 @@ def _build_router(config: ChatClientConfig):
     """Pick HTTP or stdio router based on server config."""
     http_servers = [s for s in config.servers if s.transport == "http" or s.http_url]
     stdio_servers = [s for s in config.servers if s.transport != "http" and not s.http_url]
+    if http_servers and stdio_servers:
+        return HybridToolRouter(http_servers=http_servers, stdio_servers=stdio_servers)
     if stdio_servers:
-        # If any server needs stdio, fall back to the original MCPToolRouter
-        return MCPToolRouter(config.servers)
+        return MCPToolRouter(stdio_servers)
     # All servers are HTTP — use the lightweight HTTP router
     return HTTPToolRouter(http_servers)
 
 
 class ChatApp(App):
+    TITLE = "EDGAR NFL OS"
     _DEFAULT_INPUT_HEIGHT = 6
     _MIN_INPUT_HEIGHT = 4
     _MAX_INPUT_HEIGHT = 18
     _LOG_MAX_LINES = 2000
+    _LOG_RENDER_MAX_LINES = 160
+    _LOG_RENDER_MAX_CHARS = 12000
+    _SESSION_LOG_MAX_CHARS = 16000
+    _SESSION_LOG_FLUSH_DELAY_S = 0.35
     _UI_PREFS_FILENAME = ".mcp_chat_ui_prefs.json"
     _PROMPT_HISTORY_MAX = 50
     _NUMBER_WORDS: Dict[str, int] = {
@@ -394,6 +478,16 @@ class ChatApp(App):
         self._session_log_path: Path | None = None
         self._workflow_progress_active_calls: int = 0
         self._workflow_progress_monitor_generation: int = 0
+        self._request_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._request_queue_worker_running = False
+        self._request_inflight = 0
+        self._turn_state: Literal["IDLE", "RUNNING_LLM", "RUNNING_TOOLS"] = "IDLE"
+        self._chat_log_widget: RichLog | None = None
+        self._tool_log_widget: RichLog | None = None
+        self._session_log_buffer: List[str] = []
+        self._session_log_flush_handle: asyncio.Handle | None = None
+        low_churn_raw = os.environ.get("EDGAR_TUI_LOW_CHURN", "1").strip().lower()
+        self._low_churn_mode = low_churn_raw not in {"0", "false", "no", "off"}
         self._ui_prefs_path = Path.cwd() / self._UI_PREFS_FILENAME
         self._input_height_lines: int = self._DEFAULT_INPUT_HEIGHT
         self._key_debug_enabled = os.environ.get("EDGAR_TUI_KEY_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -442,6 +536,8 @@ class ChatApp(App):
 
     async def on_mount(self) -> None:
         self._init_session_log()
+        self._chat_log_widget = self.query_one("#chat_log", RichLog)
+        self._tool_log_widget = self.query_one("#tool_log", RichLog)
         self._set_active_pane("chat")
         self._set_input_height(self._input_height_lines, announce=False, persist=False)
         self.query_one("#input", TextArea).focus()
@@ -504,6 +600,7 @@ class ChatApp(App):
         self._write_tools("[bold]Tools ready:[/bold]", "Tools ready:")
         for tool in self._tools:
             self._write_tools(f"- {tool['function']['name']}", f"- {tool['function']['name']}")
+        await self._render_comfy_server_info()
         self._is_ready = True
         self._write_chat("[green]Ready. Type a request below.[/green]", "Ready. Type a request below.")
         self._write_chat(
@@ -553,6 +650,80 @@ class ChatApp(App):
             plain = f"- {name} ({base_url}) {details}"
             self._write_chat(f"[dim]{plain}[/dim]", plain)
 
+    async def _render_comfy_server_info(self) -> None:
+        if "comfy_server_info" not in self._available_tool_names:
+            return
+        call_tool = getattr(self._router, "call_tool", None)
+        if not callable(call_tool):
+            return
+
+        try:
+            payload = await asyncio.wait_for(call_tool("comfy_server_info", {}), timeout=8.0)
+        except Exception as exc:
+            self._write_chat(
+                f"[yellow]Comfy server-info diagnostics failed: {exc}[/yellow]",
+                f"Comfy server-info diagnostics failed: {exc}",
+            )
+            return
+        if not isinstance(payload, dict):
+            self._write_chat(
+                "[yellow]Comfy server-info diagnostics returned a non-object payload.[/yellow]",
+                "Comfy server-info diagnostics returned a non-object payload.",
+            )
+            return
+
+        base_url = str(payload.get("configured_base_url") or "").strip()
+        target = payload.get("target")
+        target_dict = target if isinstance(target, dict) else {}
+        host = str(target_dict.get("host") or "")
+        port = target_dict.get("port")
+        resolved_ips = target_dict.get("resolved_ips")
+        resolved_ip_list = [str(item) for item in resolved_ips] if isinstance(resolved_ips, list) else []
+        dns_error = str(target_dict.get("dns_error") or "").strip()
+        probe = payload.get("probe")
+        probe_dict = probe if isinstance(probe, dict) else {}
+
+        self._write_chat("[bold]Comfy server-info:[/bold]", "Comfy server-info:")
+        target_line = f"- configured_base_url={base_url or '<empty>'}"
+        if host:
+            target_line += f", host={host}"
+        if isinstance(port, int):
+            target_line += f", port={port}"
+        self._write_chat(f"[dim]{target_line}[/dim]", target_line)
+
+        if resolved_ip_list:
+            ips_line = f"- resolved_ips={', '.join(resolved_ip_list)}"
+            self._write_chat(f"[dim]{ips_line}[/dim]", ips_line)
+        elif dns_error:
+            dns_line = f"- dns_error={dns_error}"
+            self._write_chat(f"[yellow]{dns_line}[/yellow]", dns_line)
+        else:
+            self._write_chat("[dim]- resolved_ips=<none>[/dim]", "- resolved_ips=<none>")
+
+        if probe_dict:
+            endpoint = str(probe_dict.get("endpoint") or "")
+            latency_ms = probe_dict.get("latency_ms")
+            probe_ok = bool(probe_dict.get("ok"))
+            if probe_ok:
+                running = probe_dict.get("queue_running_count")
+                pending = probe_dict.get("queue_pending_count")
+                parts = [f"- probe_ok=true", f"endpoint={endpoint}"]
+                if isinstance(latency_ms, (int, float)):
+                    parts.append(f"latency_ms={latency_ms}")
+                if isinstance(running, int):
+                    parts.append(f"queue_running={running}")
+                if isinstance(pending, int):
+                    parts.append(f"queue_pending={pending}")
+                line = ", ".join(parts)
+                self._write_chat(f"[green]{line}[/green]", line)
+            else:
+                probe_error = str(probe_dict.get("error") or "unknown error")
+                parts = [f"- probe_ok=false", f"endpoint={endpoint}", f"error={probe_error}"]
+                if isinstance(latency_ms, (int, float)):
+                    parts.append(f"latency_ms={latency_ms}")
+                line = ", ".join(parts)
+                self._write_chat(f"[yellow]{line}[/yellow]", line)
+
     def _render_startup_banner(self) -> None:
         for line in self._EDGAR_ASCII:
             self._write_chat(f"[bold green]{line}[/bold green]", line)
@@ -590,7 +761,37 @@ class ChatApp(App):
             self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
             return
 
-        self.run_worker(self._process_message(user_text), exclusive=False)
+        self._enqueue_request(user_text)
+
+    def _enqueue_request(self, user_text: str) -> None:
+        self._request_queue.put_nowait(user_text)
+        queued_ahead = max(0, self._request_queue.qsize() - 1 + self._request_inflight)
+        if queued_ahead > 0:
+            self._write_chat(
+                f"[dim]Prompt queued ({queued_ahead} ahead).[/dim]",
+                f"Prompt queued ({queued_ahead} ahead).",
+            )
+        if self._request_queue_worker_running:
+            return
+        self._request_queue_worker_running = True
+        self.run_worker(self._drain_request_queue(), exclusive=False)
+
+    async def _drain_request_queue(self) -> None:
+        try:
+            while not self._request_queue.empty():
+                user_text = await self._request_queue.get()
+                self._request_inflight = 1
+                try:
+                    await self._process_message(user_text)
+                finally:
+                    self._request_inflight = 0
+                    self._turn_state = "IDLE"
+                    self._request_queue.task_done()
+        finally:
+            self._request_queue_worker_running = False
+            if not self._request_queue.empty():
+                self._request_queue_worker_running = True
+                self.run_worker(self._drain_request_queue(), exclusive=False)
 
     def _handle_local_command(self, user_text: str) -> bool:
         command = user_text.strip().lower()
@@ -610,10 +811,16 @@ class ChatApp(App):
         if command_name in {"/importwf", "/importworkflow"}:
             self._run_import_workflow_flow(user_text)
             return True
+        if command_name in {"/imageedit", "/imgedit", "/editimg"}:
+            self._run_imageedit_flow(user_text)
+            return True
+        if command_name in {"/vary", "/variation", "/variations"}:
+            self._run_variation_flow(user_text)
+            return True
         if command_name == "/moodboard":
             self._run_moodboard_flow(user_text)
             return True
-        if command_name == "/tanktracks":
+        if command_name in {"/tanktracks", "/tanktrack"}:
             self._run_tanktracks_flow(user_text)
             return True
         return False
@@ -636,8 +843,16 @@ class ChatApp(App):
             "- /importwf <image_id> [id=workflow_id] (alias: /importworkflow) import embedded Photarium workflow into catalog",
         )
         self._write_chat(
-            "- [cyan]/tanktracks <image_id>[/cyan] run the add-tank-tracks variant flow",
-            "- /tanktracks <image_id> run the add-tank-tracks variant flow",
+            "- [cyan]/tanktracks|/tanktrack <image_id>[/cyan] run the add-tank-tracks variant flow",
+            "- /tanktracks|/tanktrack <image_id> run the add-tank-tracks variant flow",
+        )
+        self._write_chat(
+            "- [cyan]/imageedit <image_id> <edit request>[/cyan] run a flexible image-edit workflow flow",
+            "- /imageedit <image_id> <edit request> run a flexible image-edit workflow flow",
+        )
+        self._write_chat(
+            "- [cyan]/vary <image_id>[/cyan] run the image-variation flow",
+            "- /vary <image_id> run the image-variation flow",
         )
         self._write_chat("[bold]Keyboard shortcuts:[/bold]", "Keyboard shortcuts:")
         self._write_chat("- [cyan]F1 / F2[/cyan] focus Chat / Tools pane", "- F1 / F2 focus Chat / Tools pane")
@@ -715,13 +930,69 @@ class ChatApp(App):
     def _show_tanktracks_usage(self) -> None:
         self._write_chat("[bold]Tank Tracks Flow Usage[/bold]", "Tank Tracks Flow Usage")
         self._write_chat(
-            "[dim]/tanktracks <image_id> [parent=<image_id>] [workflow=add_tank_tracks] [prompt=\"...\"][/dim]",
-            "/tanktracks <image_id> [parent=<image_id>] [workflow=add_tank_tracks] [prompt=\"...\"]",
+            (
+                "[dim]/tanktracks|/tanktrack <image_id> [parent=<image_id>] [workflow=add_tank_tracks] "
+                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5][/dim]"
+            ),
+            (
+                "/tanktracks|/tanktrack <image_id> [parent=<image_id>] [workflow=add_tank_tracks] "
+                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5]"
+            ),
         )
         self._write_chat(
             "[dim]Example: /tanktracks 1cc224eb-022b-4ce9-0dd8-3f274f4f4300[/dim]",
             "Example: /tanktracks 1cc224eb-022b-4ce9-0dd8-3f274f4f4300",
         )
+
+    def _show_variation_usage(self) -> None:
+        self._write_chat("[bold]Image Variation Flow Usage[/bold]", "Image Variation Flow Usage")
+        self._write_chat(
+            (
+                "[dim]/vary|/variation|/variations <image_id> [parent=<image_id>] "
+                "[workflow=image_variation_maker] [analysis=\"...\"] [upscale=true|false] "
+                "[runs=3] [sweep=seed|prompt|denoise] [denoise=0.4,0.6,0.8][/dim]"
+            ),
+            (
+                "/vary|/variation|/variations <image_id> [parent=<image_id>] "
+                "[workflow=image_variation_maker] [analysis=\"...\"] [upscale=true|false] "
+                "[runs=3] [sweep=seed|prompt|denoise] [denoise=0.4,0.6,0.8]"
+            ),
+        )
+        self._write_chat(
+            "[dim]Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 analysis=\"Describe materials and lighting\"[/dim]",
+            "Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 analysis=\"Describe materials and lighting\"",
+        )
+        self._write_chat(
+            "[dim]Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 run it 3 times varying the prompt[/dim]",
+            "Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 run it 3 times varying the prompt",
+        )
+        self._write_chat(
+            "[dim]Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 denoise 0.4->0.8 step 0.1[/dim]",
+            "Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 denoise 0.4->0.8 step 0.1",
+        )
+
+    def _show_imageedit_usage(self) -> None:
+        self._write_chat("[bold]Image Edit Flow Usage[/bold]", "Image Edit Flow Usage")
+        self._write_chat(
+            (
+                "[dim]/imageedit|/imgedit <image_id> <natural language edit request> "
+                "[workflow=image_edit] [parent=<image_id>] [analysis=\"...\"] "
+                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5][/dim]"
+            ),
+            (
+                "/imageedit|/imgedit <image_id> <natural language edit request> "
+                "[workflow=image_edit] [parent=<image_id>] [analysis=\"...\"] "
+                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5]"
+            ),
+        )
+        self._write_chat(
+            "[dim]Example: /imageedit 75e9... make it look like polished brass with softer studio lighting[/dim]",
+            "Example: /imageedit 75e9... make it look like polished brass with softer studio lighting",
+        )
+
+    def _echo_local_command(self, user_text: str) -> None:
+        raw = user_text.strip()
+        self._write_chat(f"[dim]Command: {raw}[/dim]", f"Command: {raw}")
 
     def _show_import_workflow_usage(self) -> None:
         self._write_chat("[bold]Import Workflow Flow Usage[/bold]", "Import Workflow Flow Usage")
@@ -762,6 +1033,20 @@ class ChatApp(App):
                 normalized.append(token)
         return normalized
 
+    @staticmethod
+    def _find_uuid_token(text: str) -> str | None:
+        match = re.search(
+            r"\b[0-9a-fA-F]{8}-"
+            r"[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{12}\b",
+            text,
+        )
+        if not match:
+            return None
+        return match.group(0)
+
     def _run_moodboard_flow(self, user_text: str) -> None:
         raw = user_text.strip()
         parts = raw.split(maxsplit=1)
@@ -769,6 +1054,7 @@ class ChatApp(App):
         if self._is_local_help_request(remainder):
             self._show_moodboard_usage()
             return
+        self._echo_local_command(user_text)
 
         count_value, remainder = self._extract_local_field(
             remainder,
@@ -821,7 +1107,7 @@ class ChatApp(App):
         if not self._is_ready:
             self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
             return
-        self.run_worker(self._process_message(flow_prompt), exclusive=False)
+        self._enqueue_request(flow_prompt)
 
     def _run_aspect_flow(self, user_text: str) -> None:
         raw = user_text.strip()
@@ -830,11 +1116,37 @@ class ChatApp(App):
         if self._is_local_help_request(remainder):
             self._show_aspect_usage()
             return
+        self._echo_local_command(user_text)
 
         targets_value, remainder = self._extract_local_field(
             remainder,
-            r"(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*([0-9xX:,_-]+)(?=\s|$)",
+            r'(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*"([0-9xX:,\s_-]+)"?(?=\s|$)',
         )
+        if targets_value is None:
+            targets_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*'([0-9xX:,\s_-]+)'?(?=\s|$)",
+            )
+        if targets_value is None:
+            targets_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*([0-9xX:,_-]+)(?=\s|$)",
+            )
+        if targets_value is None:
+            targets_value, remainder = self._extract_local_field(
+                remainder,
+                r'(?:^|\s)(?:targets|target|ratios|ratio)\s+"([0-9xX:,\s_-]+)"?(?=\s|$)',
+            )
+        if targets_value is None:
+            targets_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:targets|target|ratios|ratio)\s+'([0-9xX:,\s_-]+)'?(?=\s|$)",
+            )
+        if targets_value is None:
+            targets_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:targets|target|ratios|ratio)\s+([0-9xX:,_-]+)(?=\s|$)",
+            )
         workflow_value, remainder = self._extract_local_field(
             remainder,
             r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
@@ -899,8 +1211,18 @@ class ChatApp(App):
                 r"(?:^|\s)(?:negative|avoid)\s*=\s*'([^']+)'(?=\s|$)",
             )
 
-        source_id = remainder.split(maxsplit=1)[0] if remainder else ""
-        source_id = source_id.strip()
+        remainder = self._strip_variation_source_prefix(remainder)
+        inferred_source = self._find_uuid_token(remainder) if remainder else None
+        if inferred_source:
+            source_id = inferred_source
+            extra_text = re.sub(rf"\b{re.escape(inferred_source)}\b", " ", remainder, count=1)
+            extra_text = re.sub(r"\s+", " ", extra_text).strip()
+        else:
+            source_id = remainder.split(maxsplit=1)[0] if remainder else ""
+            source_id = source_id.strip()
+            extra_text = remainder[len(source_id) :].strip() if remainder and source_id else ""
+        if not targets_value and extra_text:
+            targets_value = self._infer_aspect_targets_from_text(extra_text)
         target_ratios = self._normalize_ratio_list(targets_value)
         source_ratio_hint = self._normalize_ratio_token(source_ratio_value or "")
         seed_values = self._parse_seed_values(seed_values_text)
@@ -912,6 +1234,13 @@ class ChatApp(App):
                 seed_sweep_count = max(0, min(24, int(sweep_value)))
             except ValueError:
                 seed_sweep_count = 0
+        if seed_sweep_count > 0:
+            if seed_values_text:
+                self._write_chat(
+                    "[yellow]Seed sweep policy: ignoring fixed seed lists and generating fresh random seeds for this run.[/yellow]",
+                    "Seed sweep policy: ignoring fixed seed lists and generating fresh random seeds for this run.",
+                )
+            seed_values = self._generate_random_seed_values(seed_sweep_count)
         denoise_override: float | None = None
         if denoise_value is not None:
             try:
@@ -952,7 +1281,7 @@ class ChatApp(App):
         if not self._is_ready:
             self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
             return
-        self.run_worker(self._process_message(flow_prompt), exclusive=False)
+        self._enqueue_request(flow_prompt)
 
     def _run_tanktracks_flow(self, user_text: str) -> None:
         raw = user_text.strip()
@@ -961,6 +1290,7 @@ class ChatApp(App):
         if self._is_local_help_request(remainder):
             self._show_tanktracks_usage()
             return
+        self._echo_local_command(user_text)
 
         variant_value, remainder = self._extract_local_field(
             remainder,
@@ -969,6 +1299,27 @@ class ChatApp(App):
         workflow_value, remainder = self._extract_local_field(
             remainder,
             r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
+        )
+        runs_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:runs?|count)\s*=\s*(\d{1,2})(?=\s|$)",
+        )
+        if runs_value is None:
+            runs_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:runs?|count)\s+(\d{1,2})(?=\s|$)",
+            )
+        sweep_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:sweep|vary|variation)\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
+        )
+        post_aspect_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:post_aspect|post_ar|output_aspect|aspect)\s*=\s*([0-9xX:]+)(?=\s|$)",
+        )
+        seed_start_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:seed_start|start_seed|seed)\s*=\s*(\d{1,20})(?=\s|$)",
         )
         prompt_value, remainder = self._extract_local_field(
             remainder,
@@ -979,6 +1330,12 @@ class ChatApp(App):
                 remainder,
                 r"(?:^|\s)(?:prompt|instruction)\s*=\s*'([^']+)'(?=\s|$)",
             )
+        if prompt_value is not None:
+            self._write_chat(
+                "[yellow]/tanktracks uses a fixed workflow prompt. Remove prompt=... and retry.[/yellow]",
+                "/tanktracks uses a fixed workflow prompt. Remove prompt=... and retry.",
+            )
+            return
 
         source_id = remainder.split(maxsplit=1)[0] if remainder else ""
         source_id = source_id.strip()
@@ -988,21 +1345,232 @@ class ChatApp(App):
 
         variant_of = variant_value or source_id
         workflow_id = workflow_value or "add_tank_tracks"
+        extra_text = remainder[len(source_id) :].strip() if remainder else ""
+        run_count: int | None = None
+        if runs_value is not None:
+            try:
+                run_count = max(1, min(24, int(runs_value)))
+            except ValueError:
+                run_count = None
+        if run_count is None and extra_text:
+            run_count = self._parse_run_count_from_text(extra_text)
+        if run_count is None:
+            run_count = 1
+        sweep_target = self._normalize_sweep_target(sweep_value)
+        if sweep_target is None and run_count > 1:
+            sweep_target = "seed"
+        post_aspect_ratio = self._normalize_ratio_token(post_aspect_value or "")
+        if post_aspect_ratio is None:
+            inferred_post_aspect = self._infer_aspect_targets_from_text(extra_text)
+            post_aspect_ratio = self._normalize_ratio_token(inferred_post_aspect or "")
+        seed_start: int | None = None
+        if seed_start_value is not None:
+            try:
+                seed_start = int(seed_start_value)
+            except ValueError:
+                seed_start = None
+
+        if not self._is_ready:
+            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
+            return
+        if run_count > 1 and sweep_target == "seed":
+            if seed_start_value is not None:
+                self._write_chat(
+                    "[yellow]Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.[/yellow]",
+                    "Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.",
+                )
+            random_seeds = self._generate_random_seed_values(run_count)
+            self._write_chat(
+                (
+                    f"[bold cyan]Tank Tracks Flow:[/bold cyan] source={source_id} variant_of={variant_of} "
+                    f"runs={run_count} sweep=seed"
+                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+                ),
+                (
+                    f"Tank Tracks Flow: source={source_id} variant_of={variant_of} runs={run_count} sweep=seed"
+                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+                ),
+            )
+            for run_index, seed_value in enumerate(random_seeds):
+                flow_prompt = self._build_tanktracks_flow_prompt(
+                    source_id=source_id,
+                    variant_of=variant_of,
+                    workflow_id=workflow_id,
+                    seed_override=seed_value,
+                    post_aspect_ratio=post_aspect_ratio,
+                    run_index=run_index + 1,
+                    run_count=run_count,
+                )
+                self._enqueue_request(flow_prompt)
+            return
 
         flow_prompt = self._build_tanktracks_flow_prompt(
             source_id=source_id,
             variant_of=variant_of,
             workflow_id=workflow_id,
-            prompt_override=prompt_value,
+            seed_override=seed_start,
+            post_aspect_ratio=post_aspect_ratio,
+            run_index=None,
+            run_count=None,
         )
         self._write_chat(
-            f"[bold cyan]Tank Tracks Flow:[/bold cyan] source={source_id} variant_of={variant_of}",
-            f"Tank Tracks Flow: source={source_id} variant_of={variant_of}",
+            (
+                f"[bold cyan]Tank Tracks Flow:[/bold cyan] source={source_id} variant_of={variant_of}"
+                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+            ),
+            (
+                f"Tank Tracks Flow: source={source_id} variant_of={variant_of}"
+                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+            ),
+        )
+        self._enqueue_request(flow_prompt)
+
+    def _run_variation_flow(self, user_text: str) -> None:
+        raw = user_text.strip()
+        parts = raw.split(maxsplit=1)
+        remainder = parts[1].strip() if len(parts) > 1 else ""
+        if self._is_local_help_request(remainder):
+            self._show_variation_usage()
+            return
+        self._echo_local_command(user_text)
+
+        variant_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:parent|variant_of|upload_to)\s*=\s*([A-Za-z0-9-]+)(?=\s|$)",
+        )
+        workflow_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
+        )
+        analysis_value, remainder = self._extract_local_field(
+            remainder,
+            (
+                r'(?:^|\s)(?:analysis|analysis_prompt|analysis_instructions|image_analysis_prompt|'
+                r'image_analysis_instructions|prompt|instruction)\s*=\s*"([^"]+)"(?=\s|$)'
+            ),
+        )
+        if analysis_value is None:
+            analysis_value, remainder = self._extract_local_field(
+                remainder,
+                (
+                    r"(?:^|\s)(?:analysis|analysis_prompt|analysis_instructions|image_analysis_prompt|"
+                    r"image_analysis_instructions|prompt|instruction)\s*=\s*'([^']+)'(?=\s|$)"
+                ),
+            )
+        upscale_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)upscale\s*=\s*(true|false|1|0|yes|no)(?=\s|$)",
+        )
+        if upscale_value is None:
+            upscale_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)upscale\s+(true|false|1|0|yes|no)(?=\s|$)",
+            )
+        run_count_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:runs?|run_count|count)\s*=\s*(\d{1,2})(?=\s|$)",
+        )
+        if run_count_value is None:
+            run_count_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:runs?|run_count|count)\s+(\d{1,2})(?=\s|$)",
+            )
+        sweep_target_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:sweep|vary|variation)\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
+        )
+        if sweep_target_value is None:
+            sweep_target_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:sweep|vary|variation)\s+([A-Za-z0-9._-]+)(?=\s|$)",
+            )
+
+        remainder = self._strip_variation_source_prefix(remainder)
+        source_id = remainder.split(maxsplit=1)[0] if remainder else ""
+        source_id = source_id.strip()
+        if not source_id:
+            self._show_variation_usage()
+            return
+        extra_text = remainder[len(source_id) :].strip() if remainder else ""
+
+        upscale_flag: bool | None = None
+        if upscale_value is not None:
+            normalized = upscale_value.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on"}:
+                upscale_flag = True
+            elif normalized in {"0", "false", "no", "n", "off"}:
+                upscale_flag = False
+
+        run_count: int | None = None
+        if run_count_value is not None:
+            try:
+                run_count = max(1, min(24, int(run_count_value)))
+            except ValueError:
+                run_count = None
+        if run_count is None and extra_text:
+            run_count = self._parse_run_count_from_text(extra_text)
+
+        # Shorthand like "sweep 4 runs" usually means run-count, not sweep target "4".
+        if sweep_target_value and str(sweep_target_value).strip().isdigit():
+            if run_count is None:
+                try:
+                    run_count = max(1, min(24, int(str(sweep_target_value).strip())))
+                except ValueError:
+                    run_count = None
+            sweep_target_value = None
+
+        sweep_target = self._normalize_sweep_target(sweep_target_value)
+        if sweep_target is None and extra_text:
+            sweep_target = self._infer_variation_sweep(extra_text)
+
+        sweep_param, sweep_values = self._parse_sweep_values(extra_text)
+        if sweep_param and sweep_target is None:
+            sweep_target = self._normalize_sweep_target(sweep_param)
+        if sweep_values:
+            sweep_values = sweep_values[:24]
+            if run_count is None:
+                run_count = len(sweep_values)
+        if run_count and run_count > 1 and sweep_target is None:
+            sweep_target = "seed"
+        random_seed_values: List[int] = []
+        if run_count and run_count > 1 and sweep_target == "seed":
+            random_seed_values = self._generate_random_seed_values(run_count)
+
+        variant_of = variant_value or source_id
+        workflow_id = workflow_value or "image_variation_maker"
+
+        flow_prompt = self._build_variation_flow_prompt(
+            source_id=source_id,
+            variant_of=variant_of,
+            workflow_id=workflow_id,
+            analysis_prompt=analysis_value,
+            upscale=upscale_flag,
+            run_count=run_count,
+            sweep_target=sweep_target,
+            sweep_values=sweep_values,
+            seed_values=random_seed_values,
+            extra_instructions=extra_text,
+        )
+        self._write_chat(
+            f"[bold cyan]Variation Flow:[/bold cyan] source={source_id} variant_of={variant_of}",
+            f"Variation Flow: source={source_id} variant_of={variant_of}",
         )
         if not self._is_ready:
             self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
             return
-        self.run_worker(self._process_message(flow_prompt), exclusive=False)
+        self._enqueue_request(flow_prompt)
+
+    @staticmethod
+    def _strip_variation_source_prefix(text: str) -> str:
+        if not text:
+            return text
+        normalized = re.sub(
+            r"^\s*(?:image\s+id|image_id|image|id)\b\s*(?:[:=]\s*)?",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        return normalized.strip()
 
     def _run_import_workflow_flow(self, user_text: str) -> None:
         raw = user_text.strip()
@@ -1011,6 +1579,7 @@ class ChatApp(App):
         if self._is_local_help_request(remainder):
             self._show_import_workflow_usage()
             return
+        self._echo_local_command(user_text)
 
         workflow_id_value, remainder = self._extract_local_field(
             remainder,
@@ -1069,7 +1638,147 @@ class ChatApp(App):
         if not self._is_ready:
             self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
             return
-        self.run_worker(self._process_message(flow_prompt), exclusive=False)
+        self._enqueue_request(flow_prompt)
+
+    def _run_imageedit_flow(self, user_text: str) -> None:
+        raw = user_text.strip()
+        parts = raw.split(maxsplit=1)
+        remainder = parts[1].strip() if len(parts) > 1 else ""
+        if self._is_local_help_request(remainder):
+            self._show_imageedit_usage()
+            return
+        self._echo_local_command(user_text)
+
+        variant_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:parent|variant_of|upload_to)\s*=\s*([A-Za-z0-9-]+)(?=\s|$)",
+        )
+        workflow_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
+        )
+        runs_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:runs?|count)\s*=\s*(\d{1,2})(?=\s|$)",
+        )
+        if runs_value is None:
+            runs_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:runs?|count)\s+(\d{1,2})(?=\s|$)",
+            )
+        sweep_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:sweep|vary|variation)\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
+        )
+        post_aspect_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:post_aspect|post_ar|output_aspect|aspect)\s*=\s*([0-9xX:]+)(?=\s|$)",
+        )
+        seed_start_value, remainder = self._extract_local_field(
+            remainder,
+            r"(?:^|\s)(?:seed_start|start_seed|seed)\s*=\s*(\d{1,20})(?=\s|$)",
+        )
+        analysis_value, remainder = self._extract_local_field(
+            remainder,
+            r'(?:^|\s)(?:analysis|analysis_prompt)\s*=\s*"([^"]+)"(?=\s|$)',
+        )
+        if analysis_value is None:
+            analysis_value, remainder = self._extract_local_field(
+                remainder,
+                r"(?:^|\s)(?:analysis|analysis_prompt)\s*=\s*'([^']+)'(?=\s|$)",
+            )
+
+        remainder = self._strip_variation_source_prefix(remainder)
+        source_id = remainder.split(maxsplit=1)[0] if remainder else ""
+        source_id = source_id.strip()
+        if not source_id:
+            self._show_imageedit_usage()
+            return
+        edit_request = remainder[len(source_id) :].strip() if remainder else ""
+        if not edit_request:
+            self._show_imageedit_usage()
+            return
+
+        variant_of = variant_value or source_id
+        workflow_id = workflow_value or "image_edit"
+        run_count: int | None = None
+        if runs_value is not None:
+            try:
+                run_count = max(1, min(24, int(runs_value)))
+            except ValueError:
+                run_count = None
+        if run_count is None and edit_request:
+            run_count = self._parse_run_count_from_text(edit_request)
+        if run_count is None:
+            run_count = 1
+        sweep_target = self._normalize_sweep_target(sweep_value)
+        if sweep_target is None and run_count > 1:
+            sweep_target = "seed"
+        post_aspect_ratio = self._normalize_ratio_token(post_aspect_value or "")
+        seed_start: int | None = None
+        if seed_start_value is not None:
+            try:
+                seed_start = int(seed_start_value)
+            except ValueError:
+                seed_start = None
+        if not self._is_ready:
+            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
+            return
+        if run_count > 1 and sweep_target == "seed":
+            if seed_start_value is not None:
+                self._write_chat(
+                    "[yellow]Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.[/yellow]",
+                    "Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.",
+                )
+            random_seeds = self._generate_random_seed_values(run_count)
+            self._write_chat(
+                (
+                    f"[bold cyan]Image Edit Flow:[/bold cyan] source={source_id} workflow={workflow_id} "
+                    f"runs={run_count} sweep=seed"
+                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+                ),
+                (
+                    f"Image Edit Flow: source={source_id} workflow={workflow_id} runs={run_count} sweep=seed"
+                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+                ),
+            )
+            for run_index, seed_value in enumerate(random_seeds):
+                flow_prompt = self._build_imageedit_flow_prompt(
+                    source_id=source_id,
+                    variant_of=variant_of,
+                    workflow_id=workflow_id,
+                    edit_request=edit_request,
+                    analysis_prompt=analysis_value,
+                    seed_override=seed_value,
+                    post_aspect_ratio=post_aspect_ratio,
+                    run_index=run_index + 1,
+                    run_count=run_count,
+                )
+                self._enqueue_request(flow_prompt)
+            return
+
+        flow_prompt = self._build_imageedit_flow_prompt(
+            source_id=source_id,
+            variant_of=variant_of,
+            workflow_id=workflow_id,
+            edit_request=edit_request,
+            analysis_prompt=analysis_value,
+            seed_override=seed_start,
+            post_aspect_ratio=post_aspect_ratio,
+            run_index=None,
+            run_count=None,
+        )
+        self._write_chat(
+            (
+                f"[bold cyan]Image Edit Flow:[/bold cyan] source={source_id} workflow={workflow_id}"
+                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+            ),
+            (
+                f"Image Edit Flow: source={source_id} workflow={workflow_id}"
+                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
+            ),
+        )
+        self._enqueue_request(flow_prompt)
 
     @staticmethod
     def _build_moodboard_flow_prompt(
@@ -1131,8 +1840,8 @@ class ChatApp(App):
         target_text = ", ".join(target_ratios)
         source_hint_text = source_ratio_hint or "none provided; infer from image dimensions"
         preserve_text = preserve_guidance or (
-            "Keep the same subject, scene, composition intent, lighting, and style. "
-            "Only adjust framing/outpaint to reach the target ratio."
+            "Keep the same subject, scene, composition intent, lighting, and style. Keep the main subject completely in the frame and in full view. Avoid excessive cropping of the main subject. "
+            "Only adjust framing/outpaint while keeping the main subject completely in the frame and in full view while reaching the target ratio."
         )
         negative_text = negative_guidance or (
             "Do not change subject identity or key scene elements. "
@@ -1145,6 +1854,39 @@ class ChatApp(App):
             seed_sweep_text = f"{seed_sweep_count} distinct seeds (agent selects values)"
         else:
             seed_sweep_text = "none requested"
+        if workflow_id == "aspect_ratio_adjustment":
+            return (
+                "ASPECT RATIO FLOW REQUEST\n"
+                "Run this as a deterministic, minimal-branch flow inside the TUI.\n\n"
+                f"Source catalog image ID: {source_id}\n"
+                f"Requested target aspect ratios: {target_text}\n"
+                f"Source ratio hint: {source_hint_text}\n"
+                f"Requested upload target image ID: {variant_of}\n"
+                f"Workflow preference: {workflow_id}\n"
+                f"Max safe per-step ratio delta (log-space): {max_delta:.2f}\n"
+                f"Denoise override: {denoise_text}\n"
+                f"Seed sweep request: {seed_sweep_text}\n"
+                f"Positive preservation guidance: {preserve_text}\n"
+                f"Negative guidance: {negative_text}\n\n"
+                "Execution rules (aspect_ratio_adjustment fast path):\n"
+                "1. Download source image from Photarium by canonical image ID (never by display name).\n"
+                "2. Determine true source aspect ratio from Photarium metadata width/height when available; otherwise use workflows_image_info on the downloaded file. If a hint is provided, validate it.\n"
+                "3. Treat each requested target ratio as an independent branch from the same original source image (never use one target branch output as another target's input).\n"
+                "4. For plain ratio requests like 3:2 or 4:5, do not inspect workflow enums. Use custom ratio mode directly (custom_ratio=true, custom_aspect_ratio=<W:H>) or the specialized aspect-ratio tool with the plain ratio token.\n"
+                "5. Do not call workflows_params_get, workflows_get, or tool_schema_get just to inspect aspect_ratio enum labels for this flow. Only introspect if an actual tool error says a specific override/field is unsupported.\n"
+                "6. If Denoise override is not provided, prefer workflows_run_aspect_ratio_adjustment first (image_path + aspect_ratio + optional prompts/seed/output_base_name).\n"
+                "7. If Denoise override is provided, go straight to workflows_run for workflow_id aspect_ratio_adjustment with an explicit overrides object (include image, custom_ratio/custom_aspect_ratio, denoise, filename_prefix, plus seed when sweeping).\n"
+                "8. If workflows_run_aspect_ratio_adjustment fails with a tool-specific internal error, fall back once to workflows_run with explicit overrides instead of repeating introspection.\n"
+                "9. If source->target exceeds max delta, insert one or more intermediate ratios only within that branch; keep all branches rooted at the original source image.\n"
+                "10. Include positive and negative guidance each step to preserve subject and scene integrity.\n"
+                "11. After each run, verify output_images. If comfy_download_image fails for an output, call comfy_history_get for the prompt_id and retry comfy_download_image with exact filename/subfolder/type. Do not use photarium_import_url(includeData=true) -> photarium_upload_image as an image transport workaround.\n"
+                "12. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+                "13. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 12.\n"
+                "14. Upload final outputs as Photarium variants under the effective parent image ID and return a concise ratio->image_id mapping.\n"
+                "15. Include branch traces (source->...->target) for each requested ratio and confirm every branch started from the same source image.\n"
+                "16. If seed sweep is requested, run one output per seed with all non-seed overrides fixed; report seed->image_id mapping.\n"
+                "17. Do not ask for CLI commands or scripts; complete with available MCP tools.\n"
+            )
         return (
             "ASPECT RATIO FLOW REQUEST\n"
             "Run this as an agentic multi-step flow inside the TUI.\n\n"
@@ -1194,34 +1936,336 @@ class ChatApp(App):
                 continue
         return values[:24]
 
+    def _generate_random_seed_values(self, count: int) -> List[int]:
+        capped = max(0, min(24, int(count)))
+        if capped <= 0:
+            return []
+        values: List[int] = []
+        seen: set[int] = set()
+        # Use cryptographic RNG so each sweep run is non-deterministic.
+        while len(values) < capped:
+            candidate = secrets.randbelow(2_147_483_647) + 1
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            values.append(candidate)
+        return values
+
+    def _parse_run_count_from_text(self, text: str) -> int | None:
+        if not text:
+            return None
+        lowered = text.lower()
+        match = re.search(r"\brun(?:\s+it)?\s+(\d{1,2})\s+times?\b", lowered)
+        if not match:
+            match = re.search(r"\b(\d{1,2})\s+times?\b", lowered)
+        if not match:
+            match = re.search(r"\b(?:across|over|for)?\s*(\d{1,2})\s+seeds?\b", lowered)
+        if match:
+            try:
+                return max(1, min(24, int(match.group(1))))
+            except ValueError:
+                return None
+        match = re.search(r"\brun(?:\s+it)?\s+([a-z]+)\s+times?\b", lowered)
+        if not match:
+            match = re.search(r"\b([a-z]+)\s+times?\b", lowered)
+        if not match:
+            match = re.search(r"\b(?:across|over|for)?\s*([a-z]+)\s+seeds?\b", lowered)
+        if match:
+            word = match.group(1).strip().lower()
+            value = self._NUMBER_WORDS.get(word)
+            if value is not None:
+                return max(1, min(24, value))
+        return None
+
+    def _normalize_sweep_target(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        token = value.strip().lower()
+        aliases = {
+            "seed": "seed",
+            "seeds": "seed",
+            "prompt": "prompt",
+            "analysis": "prompt",
+            "analysis_prompt": "prompt",
+            "analysis_instructions": "prompt",
+            "image_analysis_prompt": "prompt",
+            "image_analysis_instructions": "prompt",
+            "denoise": "denoise",
+            "cfg": "cfg",
+            "guidance": "guidance",
+            "strength": "strength",
+        }
+        return aliases.get(token, token)
+
+    def _infer_variation_sweep(self, text: str) -> str | None:
+        if not text:
+            return None
+        lowered = text.lower()
+        if re.search(r"\b(prompt|analysis|instruction)s?\b", lowered) and re.search(
+            r"\b(vary|varying|sweep|variation)\b",
+            lowered,
+        ):
+            return "prompt"
+        if re.search(r"\bdenoise\b", lowered) and re.search(
+            r"\b(vary|varying|sweep|variation)\b",
+            lowered,
+        ):
+            return "denoise"
+        if re.search(r"\bseeds?\b", lowered):
+            return "seed"
+        match = re.search(r"\b(?:sweep|vary|varying)\s+(?:the\s+)?([a-z_][a-z0-9_-]*)", lowered)
+        if match:
+            return self._normalize_sweep_target(match.group(1))
+        return None
+
+    def _parse_sweep_values(self, text: str) -> tuple[str | None, List[float]]:
+        if not text:
+            return None, []
+        param_pattern = r"(denoise|cfg|guidance|strength|steps)"
+        range_match = re.search(
+            rf"\b{param_pattern}\s*=?\s*(\d*\.?\d+)\s*(?:->|-)\s*(\d*\.?\d+)\s*(?:step|by)\s*(\d*\.?\d+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if range_match:
+            param = range_match.group(1).lower()
+            start = float(range_match.group(2))
+            end = float(range_match.group(3))
+            step = float(range_match.group(4))
+            values = self._build_range_values(start, end, step)
+            return param, self._normalize_sweep_values(param, values)
+
+        list_match = re.search(
+            rf"\b{param_pattern}\s*=\s*([0-9.,\s]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not list_match:
+            list_match = re.search(
+                rf"\b{param_pattern}\s+([0-9.,\s]+)",
+                text,
+                flags=re.IGNORECASE,
+            )
+        if list_match:
+            param = list_match.group(1).lower()
+            values = self._parse_float_values(list_match.group(2))
+            return param, self._normalize_sweep_values(param, values)
+
+        return None, []
+
+    def _infer_aspect_targets_from_text(self, text: str) -> str | None:
+        if not text:
+            return None
+        lowered = text.lower()
+        # Prefer explicit target-ish phrasing in natural language.
+        patterns = [
+            r"(?:targets?|ratios?)\D{0,24}([0-9xX:]+(?:\s*,\s*[0-9xX:]+)*)",
+            r"(?:output\s+aspect(?:\s+ratio)?(?:\s+adjustment)?(?:\s+of|\s+to)?)\D{0,24}([0-9xX:]+)",
+            r"(?:adjust(?:ment)?\s+to)\D{0,16}([0-9xX:]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                candidate = (match.group(1) or "").strip()
+                if candidate:
+                    return candidate
+
+        # If user mentions target/aspect and only one ratio exists in the free text,
+        # treat it as the intended target ratio.
+        if any(token in lowered for token in ("target", "aspect", "ratio")):
+            ratios = re.findall(r"\b\d+\s*(?::|x|X)\s*\d+\b", text)
+            unique: list[str] = []
+            for ratio in ratios:
+                normalized = self._normalize_ratio_token(ratio)
+                if normalized and normalized not in unique:
+                    unique.append(normalized)
+            if len(unique) == 1:
+                return unique[0]
+        return None
+
+    @staticmethod
+    def _parse_float_values(raw: str) -> List[float]:
+        if not raw:
+            return []
+        values: List[float] = []
+        for token in re.findall(r"\d*\.?\d+", raw):
+            try:
+                values.append(float(token))
+            except ValueError:
+                continue
+        return values
+
+    @staticmethod
+    def _build_range_values(start: float, end: float, step: float) -> List[float]:
+        if step == 0:
+            return []
+        direction = 1.0 if end >= start else -1.0
+        step = abs(step) * direction
+        values: List[float] = []
+        current = start
+        for _ in range(24):
+            if (direction > 0 and current > end + 1e-9) or (direction < 0 and current < end - 1e-9):
+                break
+            values.append(current)
+            current += step
+        return values
+
+    @staticmethod
+    def _normalize_sweep_values(param: str, values: List[float]) -> List[float]:
+        if not values:
+            return []
+        if param == "steps":
+            normalized = [float(max(1, int(round(value)))) for value in values]
+        elif param == "denoise":
+            normalized = [max(0.0, min(1.0, value)) for value in values]
+        else:
+            normalized = values
+        return normalized[:24]
+
     @staticmethod
     def _build_tanktracks_flow_prompt(
         *,
         source_id: str,
         variant_of: str,
         workflow_id: str,
-        prompt_override: str | None,
+        seed_override: int | None,
+        post_aspect_ratio: str | None,
+        run_index: int | None,
+        run_count: int | None,
     ) -> str:
-        prompt_text = prompt_override or "use workflow default prompt"
+        seed_text = str(seed_override) if seed_override is not None else "use workflow default seed"
+        post_aspect_text = post_aspect_ratio or "none"
+        run_header = (
+            f"Run index: {run_index} of {run_count}\n" if run_index is not None and run_count is not None else ""
+        )
+        if workflow_id == "add_tank_tracks":
+            return (
+                "TANK TRACKS FLOW REQUEST\n"
+                "Run this as a deterministic, minimal-branch flow inside the TUI.\n\n"
+                f"Source catalog image ID: {source_id}\n"
+                f"Requested upload target image ID: {variant_of}\n"
+                f"Workflow preference: {workflow_id}\n"
+                "Prompt behavior: use fixed workflow default prompt (no override)\n\n"
+                + run_header
+                + f"Seed override: {seed_text}\n"
+                + f"Post aspect ratio adjustment: {post_aspect_text}\n\n"
+                "Execution rules (add_tank_tracks fast path):\n"
+                "1. This is a fresh execution request. Always run now; never reuse prior results or previously uploaded image IDs as a substitute.\n"
+                "2. Resolve effective upload parent: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+                "3. Download the source image from Photarium by canonical image ID (not display name).\n"
+                "4. Run workflows_run with an explicit overrides object and wait settings. Use only these override keys:\n"
+                "   - image: <local_path>\n"
+                "   - filename_prefix: <unique>\n"
+                "   - seed: <seed_override> (include only when Seed override is specified)\n"
+                "   Preflight-check the tool-call JSON before sending: include both workflow_id and overrides.\n"
+                "   Do not set aspect_ratio/custom_* manually; let workflows_run auto-preserve aspect ratio from the input image.\n"
+                "5. Verify output_images; if empty but prompt_id exists, call workflows_watch once before retrying.\n"
+                "6. If Post aspect ratio adjustment is set (for example 4:5), run workflows_run_aspect_ratio_adjustment on the tank-tracks output using a local file path and use that adjusted result as the upload artifact.\n"
+                "7. Download the final artifact (tank-tracks output or post-aspect output) via comfy_download_image and upload to Photarium as a variant of the effective parent image ID.\n"
+                "   On upload, add tags exactly: 'tank tracks', 'caterpillar tracks', 'tracks'. Do not change the image display name (preserve the existing/source-derived display name; do not set it to 'AddTankTracks').\n"
+                "8. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 2.\n"
+                "9. Report the uploaded catalog image ID, effective parent ID, seed used (if any), and auto_aspect_ratio_source/applied_anchor if present (otherwise report the input image ratio from workflows_image_info).\n"
+                "10. Do not call workflows_capabilities_get, workflows_params_get, or tool_schema_get for this flow unless seed override support is unknown and must be verified.\n"
+                "11. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+            )
         return (
             "TANK TRACKS FLOW REQUEST\n"
             "Run this as an agentic multi-step flow inside the TUI.\n\n"
             f"Source catalog image ID: {source_id}\n"
             f"Requested upload target image ID: {variant_of}\n"
             f"Workflow preference: {workflow_id}\n"
-            f"Prompt override: {prompt_text}\n\n"
+            "Prompt behavior: use fixed workflow default prompt (no override)\n\n"
+            + run_header
+            + f"Seed override: {seed_text}\n"
+            + f"Post aspect ratio adjustment: {post_aspect_text}\n\n"
+            "Execution rules:\n"
+            "1. This is a fresh execution request. Always run now; never reuse prior results or previously uploaded image IDs as a substitute.\n"
+            "2. Retrieve the source image from Photarium by canonical image ID (not display name).\n"
+            "3. Confirm workflow capability and parameters before execution.\n"
+            "4. Determine source dimensions before running: prefer Photarium width/height metadata; otherwise call workflows_image_info on the downloaded file.\n"
+            "5. Run the selected image-edit workflow against the downloaded image.\n"
+            "6. Preserve source aspect ratio by setting workflow aspect controls to match source ratio (custom_ratio=true, custom_aspect_ratio=W:H, and nearest valid aspect_ratio anchor if required).\n"
+            "7. Use workflow default prompt (do not send prompt override).\n"
+            "8. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+            "9. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 8.\n"
+            "10. Upload the best output image as a variant of the effective parent image ID.\n"
+            "   On upload, add tags exactly: 'tank tracks', 'caterpillar tracks', 'tracks'. Do not change the image display name (preserve the existing/source-derived display name; do not set it to 'AddTankTracks').\n"
+            "11. Report the uploaded catalog image ID, effective parent ID, source ratio used, and concise tool-call trace.\n"
+            "12. If Seed override is specified and the workflow supports a seed parameter, include it explicitly in overrides.\n"
+            "13. If Post aspect ratio adjustment is specified, apply workflows_run_aspect_ratio_adjustment after the image-edit workflow and upload the adjusted output.\n"
+            "14. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+        )
+
+    @staticmethod
+    def _build_variation_flow_prompt(
+        *,
+        source_id: str,
+        variant_of: str,
+        workflow_id: str,
+        analysis_prompt: str | None,
+        upscale: bool | None,
+        run_count: int | None,
+        sweep_target: str | None,
+        sweep_values: List[float] | None,
+        seed_values: List[int] | None,
+        extra_instructions: str | None,
+    ) -> str:
+        analysis_text = analysis_prompt or "use workflow default image_analysis_instructions"
+        if upscale is None:
+            upscale_text = "not specified"
+        else:
+            upscale_text = "enabled" if upscale else "disabled"
+        if run_count:
+            run_count_text = str(run_count)
+        else:
+            run_count_text = "not specified"
+        if sweep_target:
+            sweep_text = sweep_target
+        elif run_count and run_count > 1:
+            sweep_text = "seed (default)"
+        else:
+            sweep_text = "none requested"
+        if sweep_values:
+            sweep_values_text = ", ".join(f"{value:g}" for value in sweep_values)
+        else:
+            sweep_values_text = "none provided"
+        if seed_values:
+            seed_values_text = ", ".join(str(value) for value in seed_values)
+        else:
+            seed_values_text = "none provided"
+        extra_text = extra_instructions or "none"
+        return (
+            "IMAGE VARIATION FLOW REQUEST\n"
+            "Run this as an agentic multi-step flow inside the TUI.\n\n"
+            f"Source catalog image ID: {source_id}\n"
+            f"Requested upload target image ID: {variant_of}\n"
+            f"Workflow preference: {workflow_id}\n"
+            f"Image analysis prompt: {analysis_text}\n"
+            f"Upscale request: {upscale_text}\n"
+            f"Requested run count: {run_count_text}\n"
+            f"Sweep target: {sweep_text}\n"
+            f"Sweep values: {sweep_values_text}\n"
+            f"Seed sweep values (randomized): {seed_values_text}\n"
+            f"Additional variation instructions: {extra_text}\n\n"
             "Execution rules:\n"
             "1. Retrieve the source image from Photarium by canonical image ID (not display name).\n"
-            "2. Confirm workflow capability and parameters before execution.\n"
-            "3. Determine source dimensions before running: prefer Photarium width/height metadata; otherwise call workflows_image_info on the downloaded file.\n"
-            "4. Run the selected image-edit workflow against the downloaded image.\n"
-            "5. Preserve source aspect ratio by setting workflow aspect controls to match source ratio (custom_ratio=true, custom_aspect_ratio=W:H, and nearest valid aspect_ratio anchor if required).\n"
-            "6. Apply prompt override if provided; otherwise keep workflow defaults.\n"
-            "7. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-            "8. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 7.\n"
-            "9. Upload the best output image as a variant of the effective parent image ID.\n"
-            "10. Report the uploaded catalog image ID, effective parent ID, source ratio used, and concise tool-call trace.\n"
-            "11. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+            "2. Confirm workflow capability and parameters with workflows_params_get before execution.\n"
+            "3. Download the image locally and pass the local path to the workflow image input.\n"
+            "4. If an image analysis prompt is provided, map it to the workflow's image_analysis_instructions (or the Griptape STRING input) and keep all other defaults.\n"
+            "5. If upscale is requested and the workflow exposes an upscale toggle or method (for example upscale, upscale_method, megapixels, resolution_steps), enable it and state the chosen values. If no upscale controls exist, proceed without upscaling and report that limitation.\n"
+            "6. If run count >1, run multiple jobs. Default sweep is different seeds unless a sweep target is specified; keep non-swept overrides fixed.\n"
+            "   For seed sweeps, use non-deterministic random seeds per run (never fixed sequences like 111111, 222222). If randomized seed values are provided in this request, use them as authoritative.\n"
+            "7. If sweep values are provided, run once per value in order (or truncate to run_count if smaller); treat them as authoritative for the sweep target.\n"
+            "8. If sweep target is prompt/image_analysis_instructions, generate one augmented prompt per run from the base analysis prompt (or workflow default) and keep other overrides fixed.\n"
+            "9. If sweep target is denoise/cfg/guidance/strength/steps, vary only that parameter across runs; keep prompts and seeds fixed unless seeds are the sweep target.\n"
+            "10. Run workflows_run with an explicit overrides object and a unique filename_prefix per run.\n"
+            "    Preflight-check each workflows_run call payload before sending: it must include workflow_id and overrides (never omit overrides).\n"
+            "    If doing a sweep (especially seed sweep), verify the swept parameter is explicitly present in each run's overrides and actually differs across runs; varying only filename_prefix is a mistake.\n"
+            "11. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+            "12. Upload all successful outputs as Photarium variants of the effective parent image ID (do not choose a single 'best' output).\n"
+            "13. Update Photarium prompt metadata for each uploaded image: prefer the resolved positive prompt for that run; if unavailable, use the image analysis prompt. If the upload tool accepts a prompt field, include it; otherwise call a metadata update tool after upload.\n"
+            "14. Report uploaded catalog image IDs, effective parent ID, prompt used, and concise tool-call trace. Include run index / actual swept override value -> image_id mapping for multi-run requests.\n"
+            "15. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
         )
 
     @staticmethod
@@ -1253,6 +2297,52 @@ class ChatApp(App):
             "5. Confirm packaged sidecars exist (workflow.json, meta.json, params.json) via the workflow tool results.\n"
             "6. Return concise summary: workflow_id, source image_id, params_count, and any notable packaging warnings.\n"
             "7. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+        )
+
+    @staticmethod
+    def _build_imageedit_flow_prompt(
+        *,
+        source_id: str,
+        variant_of: str,
+        workflow_id: str,
+        edit_request: str,
+        analysis_prompt: str | None,
+        seed_override: int | None,
+        post_aspect_ratio: str | None,
+        run_index: int | None,
+        run_count: int | None,
+    ) -> str:
+        analysis_text = analysis_prompt or "infer image-analysis/conditioning guidance from the edit request if the workflow supports it"
+        seed_text = str(seed_override) if seed_override is not None else "use workflow default seed"
+        post_aspect_text = post_aspect_ratio or "none"
+        run_header = (
+            f"Run index: {run_index} of {run_count}\n" if run_index is not None and run_count is not None else ""
+        )
+        return (
+            "IMAGE EDIT FLOW REQUEST\n"
+            "Run this as an agentic image-edit flow inside the TUI.\n\n"
+            f"Source catalog image ID: {source_id}\n"
+            f"Requested upload target image ID: {variant_of}\n"
+            f"Workflow preference: {workflow_id}\n"
+            f"Edit request: {edit_request}\n"
+            f"Analysis prompt (optional): {analysis_text}\n"
+            + run_header
+            + f"Seed override: {seed_text}\n"
+            + f"Post aspect ratio adjustment: {post_aspect_text}\n\n"
+            "Execution rules:\n"
+            "1. Resolve effective upload parent: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
+            "2. Download the source image from Photarium by canonical image ID.\n"
+            "3. Inspect workflow parameters with workflows_params_get (and workflows_capabilities_get if needed) to map the edit request to valid overrides.\n"
+            "4. Run workflows_run with an explicit overrides object. Always include the image input as a local file path and preserve aspect ratio unless the user explicitly asks to change framing.\n"
+            "   If Seed override is specified and the workflow supports a seed parameter, include it explicitly in overrides.\n"
+            "5. Map the natural-language edit request to the best available prompt/instruction fields for the selected workflow.\n"
+            "6. If the workflow has image-analysis or conditioning text fields, use the provided analysis prompt when present; otherwise derive concise guidance from the edit request.\n"
+            "7. Verify output_images; if empty but prompt_id exists, call workflows_watch once before retrying download.\n"
+            "8. If Post aspect ratio adjustment is specified, run workflows_run_aspect_ratio_adjustment on the image-edit output using a local file path and use the adjusted result as the upload artifact.\n"
+            "9. Download the final artifact (image-edit output or post-aspect output) via comfy_download_image and upload it to Photarium as a variant of the effective parent image ID.\n"
+            "10. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 1.\n"
+            "11. Report the uploaded catalog image ID, effective parent ID, workflow used, seed used (if any), and the exact overrides sent to workflows_run (sanitized paths are okay).\n"
+            "12. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
         )
 
     def _record_prompt_history(self, prompt: str) -> None:
@@ -1316,6 +2406,8 @@ class ChatApp(App):
         )
         self._write_chat(f"- chat lines: {len(self._chat_history)}", f"- chat lines: {len(self._chat_history)}")
         self._write_chat(f"- tool lines: {len(self._tool_history)}", f"- tool lines: {len(self._tool_history)}")
+        self._write_chat(f"- tui state: {self._turn_state}", f"- tui state: {self._turn_state}")
+        self._write_chat(f"- queued prompts: {self._request_queue.qsize()}", f"- queued prompts: {self._request_queue.qsize()}")
         if self._session_log_path is not None:
             self._write_chat(
                 f"- session log: {self._session_log_path}",
@@ -1352,10 +2444,13 @@ class ChatApp(App):
         )
 
     async def on_shutdown(self) -> None:
+        self._flush_session_log_buffer()
         self._append_session_log("SYSTEM", "Session shutdown.")
+        self._flush_session_log_buffer()
         await self._router.close()
 
     async def _process_message(self, user_text: str) -> None:
+        self._turn_state = "RUNNING_LLM"
         self._write_chat("[dim]Processing request...[/dim]", "Processing request...")
 
         # Accumulator for streamed LLM tokens (reset each round)
@@ -1367,6 +2462,7 @@ class ChatApp(App):
             nonlocal _stream_buf, _stream_shown, _assistant_content_emitted
 
             if kind == "llm_request":
+                self._turn_state = "RUNNING_LLM"
                 # Reset stream buffer for each new LLM call
                 _stream_buf.clear()
                 _stream_shown = False
@@ -1403,8 +2499,30 @@ class ChatApp(App):
                         f"[dim]Calling: {tool_list}[/dim]",
                         f"Calling: {tool_list}",
                     )
+            elif kind == "llm_tools_subset":
+                selected_count = payload.get("selected_count")
+                total_count = payload.get("total_count")
+                dropped_count = payload.get("dropped_count")
+                dropped_examples = payload.get("dropped_examples") or []
+                examples_text = ""
+                if isinstance(dropped_examples, list) and dropped_examples:
+                    preview = ", ".join(str(item) for item in dropped_examples[:4])
+                    examples_text = f" dropped examples: {preview}"
+                self._write_chat(
+                    (
+                        "[dim]Tool window trimmed for API limits: "
+                        f"{selected_count}/{total_count} sent "
+                        f"({dropped_count} omitted).{examples_text}[/dim]"
+                    ),
+                    (
+                        "Tool window trimmed for API limits: "
+                        f"{selected_count}/{total_count} sent "
+                        f"({dropped_count} omitted).{examples_text}"
+                    ),
+                )
 
             elif kind == "tool_call_start":
+                self._turn_state = "RUNNING_TOOLS"
                 name = payload.get("name", "unknown_tool")
                 args = payload.get("arguments", {})
                 # Show a compact summary of args (first 100 chars)
@@ -1561,7 +2679,12 @@ class ChatApp(App):
         self._workflow_progress_active_calls -= 1
 
     async def _monitor_workflow_progress(self, generation: int) -> None:
-        last_signature: tuple[Any, ...] | None = None
+        last_progress_signature: tuple[Any, ...] | None = None
+        last_progress_log_at: float = 0.0
+        last_percent_logged: float | None = None
+        percent_step = 5.0 if self._low_churn_mode else 2.0
+        min_log_interval_s = 1.2 if self._low_churn_mode else 0.5
+        poll_sleep_s = 0.9 if self._low_churn_mode else 0.5
         self._write_tools("[dim]ComfyUI progress monitor started.[/dim]", "ComfyUI progress monitor started.")
         while generation == self._workflow_progress_monitor_generation and self._workflow_progress_active_calls > 0:
             try:
@@ -1586,9 +2709,26 @@ class ChatApp(App):
                 node = progress.get("node")
                 percent = progress.get("percent")
                 event_type = progress.get("type")
-                signature = (prompt_id, node, percent, event_type, queue_running, queue_pending, state)
-                if signature != last_signature:
-                    percent_text = f"{float(percent):.1f}%" if isinstance(percent, (int, float)) else "n/a"
+                now = asyncio.get_running_loop().time()
+                structural_signature = (prompt_id, node, event_type, queue_running, queue_pending, state)
+                percent_value: float | None = None
+                if isinstance(percent, (int, float)):
+                    try:
+                        percent_value = float(percent)
+                    except Exception:
+                        percent_value = None
+
+                should_log = False
+                if structural_signature != last_progress_signature:
+                    should_log = True
+                elif percent_value is not None:
+                    if last_percent_logged is None:
+                        should_log = True
+                    elif abs(percent_value - last_percent_logged) >= percent_step and (now - last_progress_log_at) >= min_log_interval_s:
+                        should_log = True
+
+                if should_log:
+                    percent_text = f"{percent_value:.1f}%" if percent_value is not None else "n/a"
                     prompt_short = str(prompt_id)[:8] if isinstance(prompt_id, str) else "n/a"
                     node_text = str(node) if node is not None else "n/a"
                     message = (
@@ -1597,21 +2737,89 @@ class ChatApp(App):
                         f"queue(running={queue_running}, pending={queue_pending})"
                     )
                     self._write_tools(f"[dim]{message}[/dim]", message)
-                    last_signature = signature
-            await asyncio.sleep(0.5)
+                    last_progress_signature = structural_signature
+                    last_progress_log_at = now
+                    last_percent_logged = percent_value
+            await asyncio.sleep(poll_sleep_s)
         self._write_tools("[dim]ComfyUI progress monitor stopped.[/dim]", "ComfyUI progress monitor stopped.")
 
     def _write_chat(self, markup_text: str, plain_text: str) -> None:
-        chat_log = self.query_one("#chat_log", RichLog)
-        chat_log.write(markup_text)
-        self._chat_history.append(plain_text)
-        self._append_session_log("CHAT", plain_text)
+        chat_log = self._chat_log_widget or self.query_one("#chat_log", RichLog)
+        render_markup, render_plain = self._prepare_log_entry(markup_text, plain_text)
+        chat_log.write(render_markup)
+        self._chat_history.append(render_plain)
+        if len(self._chat_history) > self._LOG_MAX_LINES:
+            self._chat_history = self._chat_history[-self._LOG_MAX_LINES :]
+        self._append_session_log("CHAT", render_plain)
 
     def _write_tools(self, markup_text: str, plain_text: str) -> None:
-        tool_log = self.query_one("#tool_log", RichLog)
-        tool_log.write(markup_text)
-        self._tool_history.append(plain_text)
-        self._append_session_log("TOOL", plain_text)
+        tool_log = self._tool_log_widget or self.query_one("#tool_log", RichLog)
+        render_markup, render_plain = self._prepare_log_entry(markup_text, plain_text)
+        tool_log.write(render_markup)
+        self._tool_history.append(render_plain)
+        if len(self._tool_history) > self._LOG_MAX_LINES:
+            self._tool_history = self._tool_history[-self._LOG_MAX_LINES :]
+        self._append_session_log("TOOL", render_plain)
+
+    def _prepare_log_entry(self, markup_text: str, plain_text: str) -> tuple[str, str]:
+        clipped_plain = self._clip_text_for_widget(plain_text)
+        if clipped_plain == plain_text:
+            return markup_text, plain_text
+        # Avoid emitting malformed Rich markup when clipping in the middle of tags.
+        return rich_markup_escape(clipped_plain), clipped_plain
+
+    def _clip_text_for_widget(self, text: str) -> str:
+        if not text:
+            return text
+        original_lines = text.splitlines()
+        clipped_lines: List[str] = []
+        max_lines = self._LOG_RENDER_MAX_LINES
+        max_chars = self._LOG_RENDER_MAX_CHARS
+        consumed_chars = 0
+        truncated = False
+
+        for index, line in enumerate(original_lines):
+            if len(clipped_lines) >= max_lines:
+                truncated = True
+                break
+            remaining_chars = max_chars - consumed_chars
+            if remaining_chars <= 0:
+                truncated = True
+                break
+
+            if len(line) > remaining_chars:
+                clipped_lines.append(line[:remaining_chars])
+                truncated = True
+                break
+
+            clipped_lines.append(line)
+            consumed_chars += len(line) + 1
+            if index < len(original_lines) - 1 and consumed_chars >= max_chars:
+                truncated = True
+                break
+
+        clipped = "\n".join(clipped_lines)
+        if not truncated:
+            return text
+
+        omitted_lines = max(0, len(original_lines) - len(clipped_lines))
+        clipped_chars = len(clipped)
+        summary = (
+            f"[truncated for UI: {clipped_chars}/{len(text)} chars"
+            f", omitted_lines={omitted_lines}]"
+        )
+        if clipped:
+            return f"{clipped}\n{summary}"
+        return summary
+
+    def _clip_text_for_session_log(self, text: str) -> str:
+        if len(text) <= self._SESSION_LOG_MAX_CHARS:
+            return text
+        kept = text[: self._SESSION_LOG_MAX_CHARS]
+        return (
+            f"{kept}\n"
+            f"[truncated for session log: {self._SESSION_LOG_MAX_CHARS}/{len(text)} chars]"
+        )
 
     def _init_session_log(self) -> None:
         if self._session_log_path is not None:
@@ -1639,11 +2847,37 @@ class ChatApp(App):
         if self._session_log_path is None:
             return
         timestamp = datetime.now().isoformat(timespec="seconds")
-        normalized = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+        clipped = self._clip_text_for_session_log(text)
+        normalized = clipped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
         line = f"[{timestamp}] {channel}: {normalized}\n"
+        self._session_log_buffer.append(line)
+        if len(self._session_log_buffer) >= 64:
+            self._flush_session_log_buffer()
+            return
+        if self._session_log_flush_handle is not None:
+            return
+        try:
+            self._session_log_flush_handle = asyncio.get_running_loop().call_later(
+                self._SESSION_LOG_FLUSH_DELAY_S,
+                self._flush_session_log_buffer,
+            )
+        except Exception:
+            self._flush_session_log_buffer()
+
+    def _flush_session_log_buffer(self) -> None:
+        if self._session_log_flush_handle is not None:
+            try:
+                self._session_log_flush_handle.cancel()
+            except Exception:
+                pass
+            self._session_log_flush_handle = None
+        if self._session_log_path is None or not self._session_log_buffer:
+            return
+        payload = "".join(self._session_log_buffer)
+        self._session_log_buffer.clear()
         try:
             with self._session_log_path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
+                handle.write(payload)
         except Exception:
             return
 
@@ -1820,12 +3054,15 @@ class ChatApp(App):
 
     def _to_openai_tool(self, spec) -> Dict[str, Any]:
         description = self._augment_tool_description(spec.name, spec.description)
+        parameters = _normalize_openai_tool_schema(spec.input_schema)
+        if spec.name == "workflows_run":
+            parameters = ensure_workflows_run_schema(parameters)
         return {
             "type": "function",
             "function": {
                 "name": spec.name,
                 "description": description,
-                "parameters": spec.input_schema or {"type": "object", "properties": {}},
+                "parameters": parameters,
             },
         }
 
@@ -1877,11 +3114,47 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _best_effort_terminal_restore() -> None:
+    """Attempt to restore terminal private modes after interrupted TUI exit."""
+    try:
+        # Disable common mouse tracking modes, focus events, bracketed paste,
+        # reset attributes, show cursor, and leave application cursor mode.
+        os.write(
+            1,
+            (
+                b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l"
+                b"\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[0m"
+            ),
+        )
+    except Exception:
+        pass
+    try:
+        subprocess.run(["stty", "sane"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def main() -> None:
     args = _parse_args()
+    # Prefer the safer keyboard path by default; advanced kitty protocol can
+    # cause dropped/doubled keypresses on some terminal+Textual combinations.
+    if (
+        "EDGAR_TUI_FORCE_KITTY_KEYBOARD" not in os.environ
+        and "EDGAR_TUI_DISABLE_KITTY_KEYBOARD" not in os.environ
+    ):
+        os.environ["EDGAR_TUI_DISABLE_KITTY_KEYBOARD"] = "1"
     config = load_config(args.config, model_override=args.model)
     app = ChatApp(config)
-    app.run(mouse=args.mouse)
+    try:
+        app.run(mouse=args.mouse)
+    except KeyboardInterrupt:
+        _best_effort_terminal_restore()
+        raise
+    except BaseException:
+        _best_effort_terminal_restore()
+        raise
+    finally:
+        _best_effort_terminal_restore()
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, Dict, List, Tuple
 
 
@@ -65,16 +66,23 @@ WORKFLOW_OUTPUT_RELIABILITY_POLICY = PromptPolicy(
     policy_id="workflow_output_reliability",
     title="WORKFLOW OUTPUT RELIABILITY:",
     rules=(
-        "Be explicit before tool calls: name the tool, why it is needed, and the key arguments you will pass.",
+        "Before tool calls, keep the user-facing plan to one short sentence naming the tool and the main intent.",
+        "Do not narrate internal JSON/schema plumbing to the user. Avoid mentioning wrapper names like overrides, token, payload, or raw JSON unless the user is explicitly debugging a failed tool call.",
         "Before running a workflow, state the workflow_id and the parameter plan, including both explicit overrides and key defaults that will remain in effect.",
         "When using workflows_run/workflows_run_aspect_ratio_adjustment, explicitly state workflow_id and override parameters.",
+        "Before calling workflows_run, perform a preflight argument check in your reasoning: confirm the outgoing tool-call JSON includes both workflow_id and an explicit overrides object (use {} if intentionally empty). If overrides is missing, do not call the tool yet; fix the arguments first.",
         "Do not silently switch workflow_id; if the user names a workflow, keep that exact workflow_id unless the user approves a change.",
         "For workflows_run, always pass an explicit overrides object; never omit it.",
+        "Treat shorthand requests like 'edit image xyz' or 'edit image id xyz' as intent that still requires argument synthesis before tool execution: infer/confirm workflow_id, resolve whether xyz is a Photarium image ID vs local path vs Comfy filename, and then construct explicit overrides.",
         "Treat 'catalog' and 'photo catalog' as semantically equivalent to Photarium / Photarium catalog.",
         "Unless user says otherwise, treat 'image' or 'image id' as a Photarium catalog image id.",
+        "If a shorthand image token likely refers to a Photarium image ID, verify it first with photarium_get (or equivalent catalog get tool) before committing to a workflow execution plan; if valid, download/resolve to a local path (or Comfy input filename) before passing it into workflows_run overrides.",
         "For workflows_run image overrides targeting LoadImage.image, use a local file path or Comfy input filename, not a Photarium UUID; if starting from a Photarium UUID, download first.",
         "If a workflow exposes filename_prefix (SaveImage), set a unique value before the first run.",
         "When user asks for a sweep/range (for example denoise 0.5->1.0 step 0.1), run one job per value, keep non-swept overrides fixed, set unique filename_prefix per run, and report value->output mapping.",
+        "For seed sweeps, generate non-deterministic random seeds programmatically for every run (fresh each request); never use fixed/counting seed patterns (for example 111111, 222222, or seed_start + index).",
+        "Sweep integrity check (before execution): if you say you are sweeping X (for example seed/denoise/steps/prompt), verify each outgoing workflows_run call actually includes an explicit override for X and that X differs across runs as intended. Changing only filename_prefix does not count as a sweep.",
+        "Sweep integrity check (after execution): report the actual per-run override values used (read from the tool-call payloads you sent), not just the intended plan.",
         "After workflows_run or workflows_run_aspect_ratio_adjustment, verify output_images.",
         "For heavier jobs, prefer workflows_run/workflows_run_aspect_ratio_adjustment with wait_timeout_s=300 and wait_poll_ms=1000 on the first attempt.",
         "If output_images is empty but prompt_id exists, call workflows_watch(prompt_id=..., inactivity_timeout_s=300, include_history=true) once before concluding failure.",
@@ -83,7 +91,11 @@ WORKFLOW_OUTPUT_RELIABILITY_POLICY = PromptPolicy(
         "Keep filename_prefix unique across retries to improve output attribution.",
         "For photarium_upload* tools, if name/title is a transport/query blob (for example filename=...&type=...), replace it with a semantic CamelCase name/title using only letters and digits (no spaces or punctuation).",
         "For photarium_upload* tools, tags are semantic image-content labels only (subject/style/scene/object); never add workflow/instrumentation tags (for example image-edit, img2img, denoise-*, cfg-*, steps-*).",
+        "Default upload behavior: for workflows_run/workflows_run_aspect_ratio_adjustment results with output_images, upload generated images to Photarium automatically without asking for extra confirmation or a target parent id; only skip when Photarium catalog tools are unavailable or offline.",
         "Default upload behavior: omit tags unless the user explicitly asks for tags or there are clear image-content tags already provided by the user.",
+        "When auto-uploading generated outputs without an explicit source/parent image id, upload as new catalog images (no parent linkage).",
+        "Do not ask the user whether to upload workflow outputs unless upload fails because Photarium is unavailable/offline.",
+        "When uploading generated outputs to Photarium and a prompt is known, set the image metadata prompt (pass prompt/positive_prompt on upload if supported, otherwise call a Photarium metadata update tool after upload). For image_variation_maker, prefer the resolved positive prompt; if unavailable, fall back to image_analysis_instructions.",
         "For image transfer between ComfyUI and Photarium, avoid inline base64 payload flows by default; prefer comfy_download_image + photarium_upload_from_path/upload_url and only request includeData/includeBase64 when the user explicitly asks for raw data.",
         "If output_images_source is filesystem_fallback, treat those outputs as usable and proceed with upload if the user asked.",
         "Do not claim workflow failure until these checks/retries have been attempted.",
@@ -110,7 +122,8 @@ TOOL_DISCOVERY_POLICY = PromptPolicy(
     title="TOOL DISCOVERY AND CAPABILITY CHECK:",
     rules=(
         "Before claiming a capability does not exist, review available tool names/descriptions for likely matches.",
-        "For image-edit requests, use workflows_capabilities_list/workflows_search first and prioritize workflow_id 'flux_2_klein_4B' unless the user explicitly requests a different workflow.",
+        "For image-variation requests (variants/variations), use workflows_capabilities_list/workflows_search first and prioritize workflow_id 'image_variation_maker' unless the user explicitly requests a different workflow.",
+        "For other image-edit requests, use workflows_capabilities_list/workflows_search first and prioritize workflow_id 'flux_2_klein_4B' unless the user explicitly requests a different workflow.",
         "For retrieval tasks (search/find/filter/match by concept, style, color, or keyword), prefer *_search-style tools before concluding no results.",
         "For semantic image search results, always surface image IDs clearly (prefer image_id/ids over only names) so downstream tool calls can reference stable identifiers.",
         "For color-based search tools, convert natural color language to canonical RGB hex (for example 'sky blue' -> '#87ceeb') when the tool expects a color value.",
@@ -124,6 +137,53 @@ SYSTEM_PROMPT_POLICIES: Tuple[PromptPolicy, ...] = (
     TOOL_DISCOVERY_POLICY,
 )
 
+EDGAR_EDITORIAL_ROUTING_POLICY_APPENDIX = dedent(
+    """\
+    # EDGAR Orchestrator Routing Policy (Editorial vs Workflow Tools)
+
+    Use this text inside EDGAR's orchestrator/system prompt.
+
+    ## Tool Routing Rules (Explicit)
+
+    - When a user asks to create, move, open, edit, or draft an **article/content file** for `nfl-editorial` (keywords include: article, editorial, MDX, frontmatter, issue, section, stub, draft, review, feature), use `editorial_*` tools only.
+    - Never use `workflows_*` file tools (`workflows_file_write`, `workflows_file_delete`, etc.) for any path under `/Users/julian/Code/nfl-editorial` or `src/content/editorial/...`.
+    - Treat `workflows_*` tools as scoped to the workflows repository only (`nfl-comfymcp/workflows`) unless the user explicitly asks to work there.
+
+    ## Required Preflight for New Editorial Content Files
+
+    - Before writing a new article file, call `editorial_content_create_stub` with `dryRun: true`.
+    - Verify the returned `path` starts with `src/content/editorial/`.
+    - Verify the returned `section`, `hierarchyPath`, and `issueNumber` match the user's intent.
+    - Only then call `editorial_content_create_stub` again with `write: true` and `dryRun: false`.
+
+    ## Draft Generation Rules
+
+    - For draft text generation from a brief, use `editorial_content_draft_from_brief`.
+    - If final placement is not yet decided (for example, still deciding between `nfl-backoffice` and `nfl-editorial`), call `editorial_content_draft_from_brief` with `writeTemp: true`.
+    - Prefer temp draft output over writing directly into an article file when the destination hierarchy/issue is ambiguous.
+
+    ## Cross-Repo Safety Rules
+
+    - If the source material is in another repo (e.g. `nfl-backoffice`) and the target is `nfl-editorial`, do not use a generic write tool tied to the source repo.
+    - Use source-repo read tools (or read-only file access) to gather content, then use `editorial_*` tools to create/write content in `nfl-editorial`.
+    - If no tool with write scope to the intended repo is available, stop and say so explicitly before writing anywhere else.
+
+    ## Preferred Editorial Creation Workflow
+
+    1. `editorial_content_create_stub` (`dryRun: true`)
+    2. `editorial_content_create_stub` (`write: true`, `dryRun: false`)
+    3. `editorial_content_draft_from_brief` (`writeTemp: true`)
+    4. (Optional follow-up) open the stub with `editorial_content_open_for_editing` and merge/paste draft text
+
+    ## Ambiguity Handling
+
+    - If the user gives only a topic/brief and no section hierarchy or issue number, ask for:
+      - `hierarchyPath` (for example `fashion` or `columns/reviews`)
+      - `issueNumber`
+    - Do not guess a filesystem destination and write a file in another repo as a fallback.
+    """
+)
+
 
 def _with_system_guardrails(system_prompt: str) -> str:
     composed = system_prompt.rstrip()
@@ -131,6 +191,9 @@ def _with_system_guardrails(system_prompt: str) -> str:
         if policy.marker in composed or policy.title in composed:
             continue
         composed = f"{composed}{policy.render()}"
+    editorial_routing_policy_heading = "# EDGAR Orchestrator Routing Policy (Editorial vs Workflow Tools)"
+    if editorial_routing_policy_heading not in composed:
+        composed = f"{composed}\n\n{EDGAR_EDITORIAL_ROUTING_POLICY_APPENDIX.rstrip()}\n"
     return composed
 
 

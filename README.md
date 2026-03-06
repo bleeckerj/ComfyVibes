@@ -339,6 +339,7 @@ ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interact
 |------|-------------|
 | `comfy_nodes_list` | Return the full ComfyUI node catalog — every available node type and its parameters. |
 | `comfy_queue_get` | Return the current ComfyUI queue state, including pending and running prompts. |
+| `comfy_server_info` | Return Comfy target diagnostics (configured URL, resolved IPs, and a queue probe result). |
 | `comfy_history_get` | Return ComfyUI history data. Optionally filter by `prompt_id` to get results for a specific run. |
 | `comfy_models_list` | List all available model folders (checkpoints, loras, vae, embeddings, etc.). |
 | `comfy_models_get` | List available model files within a specific folder (e.g., all checkpoint files). |
@@ -356,6 +357,8 @@ ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interact
 | `workflows_package` | Regenerate `params.json` + capability metadata for a workflow, with optional human hints. |
 | `workflows_package_many` | Batch-package many/all workflows into MCP-ready metadata and params. |
 | `workflows_package_template_get` | Return an editable hints template (`use_cases`, `examples`, `io_contract`, etc.). |
+| `workflows_file_read` | Read a text file under the primary workflows directory. |
+| `workflows_file_copy` | Copy a file under the primary workflows directory. |
 | `workflows_save` | Save a workflow entry and always regenerate packaged `meta.json` + `params.json` (optional metadata hints + auth token). |
 | `workflows_delete` | Delete a workflow entry from the store by `workflow_id`. |
 

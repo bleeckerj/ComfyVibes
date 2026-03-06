@@ -13,6 +13,7 @@ import httpx
 
 from comfy_mcp.tui_client.config import ServerConfig, load_config
 from comfy_mcp.tui_client.http_router import HTTPToolRouter
+from comfy_mcp.tui_client.hybrid_router import HybridToolRouter
 from comfy_mcp.tui_client.mcp_router import MCPToolRouter
 
 
@@ -52,8 +53,10 @@ def _build_router(servers: list[ServerConfig]):
     """Pick HTTP or stdio router based on server config."""
     http_servers = [s for s in servers if s.transport == "http" or s.http_url]
     stdio_servers = [s for s in servers if s.transport != "http" and not s.http_url]
+    if http_servers and stdio_servers:
+        return HybridToolRouter(http_servers=http_servers, stdio_servers=stdio_servers)
     if stdio_servers:
-        return MCPToolRouter(servers)
+        return MCPToolRouter(stdio_servers)
     return HTTPToolRouter(http_servers)
 
 

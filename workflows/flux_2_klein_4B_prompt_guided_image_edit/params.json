@@ -66,7 +66,7 @@
     {
       "name": "positive_prompt",
       "type": "string",
-      "default": "Replace the background with a 3D cartoon snowy winter forest trail with falling snow and soft overcast light, keep the character identical and keep the same framing and scale.\n",
+      "default": "",
       "required": false,
       "description": "CLIP Text Encode (Positive Prompt).text",
       "target": {

@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from comfy_mcp.tui_client.app import ChatApp, _strip_border_glyphs
+from comfy_mcp.tui_client.app import ChatApp, _normalize_openai_tool_schema, _strip_border_glyphs
 from comfy_mcp.tui_client.config import ChatClientConfig, LLMConfig, ServerConfig
 from comfy_mcp.tui_client.mcp_router import ToolSpec
 from comfy_mcp.tui_client.orchestrator import ToolEvent
@@ -77,6 +77,56 @@ def test_to_openai_tool(monkeypatch):
     assert tool["function"]["name"] == "workflows.list"
     assert tool["function"]["description"] == "List workflows"
     assert tool["function"]["parameters"] == {"type": "object"}
+
+
+def test_to_openai_tool_normalizes_array_items(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    spec = ToolSpec(
+        name="backoffice_build_content_source_pack",
+        description="Build source pack",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "collections": {
+                    "type": "array",
+                }
+            },
+        },
+    )
+    tool = app._to_openai_tool(spec)
+    collections = tool["function"]["parameters"]["properties"]["collections"]
+    assert collections["type"] == "array"
+    assert collections["items"] == {}
+
+
+def test_to_openai_tool_repairs_workflows_run_overrides_schema(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    spec = ToolSpec(
+        name="workflows_run",
+        description="Run workflow",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "workflow_id": {"type": "string"},
+                "overrides": {"type": "object", "additionalProperties": False},
+            },
+            "required": ["workflow_id"],
+        },
+    )
+    tool = app._to_openai_tool(spec)
+    parameters = tool["function"]["parameters"]
+    overrides = parameters["properties"]["overrides"]
+    assert overrides["type"] == "object"
+    assert overrides["additionalProperties"] is True
+    assert "workflow_id" in parameters["required"]
+    assert "overrides" in parameters["required"]
+
+
+def test_normalize_openai_tool_schema_falls_back_for_invalid_root():
+    normalized = _normalize_openai_tool_schema(None)
+    assert normalized == {"type": "object", "properties": {}}
 
 
 def test_copy_actions(monkeypatch):
@@ -151,6 +201,8 @@ def test_config_appends_prompt_policies(tmp_path):
     assert "WORKFLOW ASPECT RATIO PRESERVATION:" in cfg.system_prompt
     assert "POLICY::tool_discovery" in cfg.system_prompt
     assert "TOOL DISCOVERY AND CAPABILITY CHECK:" in cfg.system_prompt
+    assert "# EDGAR Orchestrator Routing Policy (Editorial vs Workflow Tools)" in cfg.system_prompt
+    assert "Use this text inside EDGAR's orchestrator/system prompt." in cfg.system_prompt
     assert "custom prompt" in cfg.system_prompt
     assert "Treat 'catalog' and 'photo catalog'" in cfg.system_prompt
     assert "treat 'image' or 'image id' as a Photarium catalog image id" in cfg.system_prompt
@@ -165,6 +217,8 @@ def test_config_appends_prompt_policies(tmp_path):
     assert "Before claiming a capability does not exist" in cfg.system_prompt
     assert "always surface image IDs clearly" in cfg.system_prompt
     assert "convert natural color language to canonical RGB hex" in cfg.system_prompt
+    assert "editorial_content_create_stub" in cfg.system_prompt
+    assert "Use source-repo read tools (or read-only file access)" in cfg.system_prompt
 
 
 def test_config_does_not_duplicate_existing_policy_and_keeps_order(tmp_path):
@@ -186,11 +240,15 @@ def test_config_does_not_duplicate_existing_policy_and_keeps_order(tmp_path):
     assert cfg.system_prompt.count("WORKFLOW ASPECT RATIO PRESERVATION:") == 1
     assert cfg.system_prompt.count("POLICY::tool_discovery") == 1
     assert cfg.system_prompt.count("TOOL DISCOVERY AND CAPABILITY CHECK:") == 1
+    assert cfg.system_prompt.count("# EDGAR Orchestrator Routing Policy (Editorial vs Workflow Tools)") == 1
     assert cfg.system_prompt.index("WORKFLOW OUTPUT RELIABILITY:") < cfg.system_prompt.index(
         "WORKFLOW ASPECT RATIO PRESERVATION:"
     )
     assert cfg.system_prompt.index("WORKFLOW ASPECT RATIO PRESERVATION:") < cfg.system_prompt.index(
         "TOOL DISCOVERY AND CAPABILITY CHECK:"
+    )
+    assert cfg.system_prompt.index("TOOL DISCOVERY AND CAPABILITY CHECK:") < cfg.system_prompt.index(
+        "# EDGAR Orchestrator Routing Policy (Editorial vs Workflow Tools)"
     )
 
 
@@ -219,6 +277,36 @@ def test_build_transcript(monkeypatch):
     assert "=== Chat ===" in text
     assert "You: hi" in text
     assert "=== Tools ===" in text
+
+
+def test_write_tools_clips_oversized_payload_for_widget(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+
+    class _FakeLog:
+        def __init__(self) -> None:
+            self.lines: list[str] = []
+
+        def write(self, text: str) -> None:
+            self.lines.append(text)
+
+    fake_log = _FakeLog()
+    app._tool_log_widget = fake_log  # type: ignore[assignment]
+
+    oversized = "x" * (app._LOG_RENDER_MAX_CHARS + 200)
+    app._write_tools(oversized, oversized)
+
+    assert len(fake_log.lines) == 1
+    assert "truncated for UI" in fake_log.lines[0]
+    assert "truncated for UI" in app._tool_history[-1]
+    assert len(app._tool_history[-1]) < len(oversized)
+
+
+def test_low_churn_mode_defaults_on(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("EDGAR_TUI_LOW_CHURN", raising=False)
+    app = ChatApp(_config())
+    assert app._low_churn_mode is True
 
 
 def test_process_message_does_not_duplicate_assistant_content(monkeypatch):
@@ -379,6 +467,45 @@ def test_process_message_editorial_preview_uses_tool_grounded_urls(monkeypatch):
     assert not any(line.startswith("EDGAR: These URLs might be guessed") for line in chat_lines)
 
 
+def test_request_queue_serializes_prompts(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    started: list[str] = []
+    release = asyncio.Event()
+
+    async def _fake_process(user_text: str) -> None:
+        started.append(user_text)
+        if user_text == "first":
+            await release.wait()
+
+    app._process_message = _fake_process  # type: ignore[method-assign]
+
+    workers: list[asyncio.Task[None]] = []
+
+    def _run_worker(task, exclusive=False):  # noqa: ANN001
+        workers.append(asyncio.create_task(task))
+        return None
+
+    app.run_worker = _run_worker  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        app._enqueue_request("first")
+        app._enqueue_request("second")
+        await asyncio.sleep(0)
+        assert started == ["first"]
+        assert app._request_queue.qsize() == 1
+        assert any("Prompt queued (1 ahead)." in line for line in chat_lines)
+        release.set()
+        await asyncio.gather(*workers)
+        assert started == ["first", "second"]
+        assert app._turn_state == "IDLE"
+
+    asyncio.run(_run())
+
+
 def test_reset_command_clears_context(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     app = ChatApp(_config())
@@ -420,6 +547,8 @@ def test_help_command_outputs_command_list(monkeypatch):
     assert any("/importwf" in line for line in chat_lines)
     assert any("/importworkflow" in line for line in chat_lines)
     assert any("/tanktracks" in line for line in chat_lines)
+    assert any("/imageedit" in line for line in chat_lines)
+    assert any("/vary" in line for line in chat_lines)
     assert any("Keyboard shortcuts:" in line for line in chat_lines)
     assert any("F1 / F2 focus Chat / Tools pane" in line for line in chat_lines)
     assert any("Opt+Left / Opt+Right" in line for line in chat_lines)
@@ -479,6 +608,56 @@ def test_startup_shows_edgar_banner(monkeypatch):
     assert any("Tools ready:" in line for line in tool_lines)
 
 
+def test_startup_renders_comfy_server_info_diagnostics(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    tool_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    app._write_tools = lambda _markup, plain: tool_lines.append(plain)
+
+    class _Router:
+        async def connect(self):
+            return None
+
+        def list_tool_specs(self):
+            return [
+                ToolSpec(
+                    name="comfy_server_info",
+                    description="Server info",
+                    input_schema={"type": "object"},
+                )
+            ]
+
+        async def call_tool(self, name, arguments):
+            assert name == "comfy_server_info"
+            return {
+                "configured_base_url": "http://192.168.15.54:8188",
+                "target": {
+                    "host": "192.168.15.54",
+                    "port": 8188,
+                    "resolved_ips": ["192.168.15.54"],
+                },
+                "probe": {
+                    "ok": False,
+                    "endpoint": "http://192.168.15.54:8188/queue",
+                    "error": "All connection attempts failed",
+                    "latency_ms": 12.5,
+                },
+            }
+
+    app._router = _Router()
+    app._orchestrator.set_tools = lambda tools: None
+
+    asyncio.run(app._startup())
+
+    assert any("Comfy server-info:" in line for line in chat_lines)
+    assert any("configured_base_url=http://192.168.15.54:8188" in line for line in chat_lines)
+    assert any("resolved_ips=192.168.15.54" in line for line in chat_lines)
+    assert any("probe_ok=false" in line and "All connection attempts failed" in line for line in chat_lines)
+    assert any("Tools ready:" in line for line in tool_lines)
+
+
 def test_moodboard_command_shows_usage_without_brief(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     app = ChatApp(_config())
@@ -513,14 +692,17 @@ def test_moodboard_command_builds_agentic_flow_prompt(monkeypatch):
     app._write_chat = lambda _markup, plain: chat_lines.append(plain)
 
     captured: list[str] = []
-    app._process_message = lambda user_text: captured.append(user_text) or None  # type: ignore[method-assign]
-    app.run_worker = lambda _task, exclusive=False: None
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
 
     handled = app._handle_local_command(
         "/moodboard editorial denim campaign count=16 palette=#87CEEB refs=id1,id2 workflow=image_edit"
     )
 
     assert handled is True
+    assert any(
+        line == "Command: /moodboard editorial denim campaign count=16 palette=#87CEEB refs=id1,id2 workflow=image_edit"
+        for line in chat_lines
+    )
     assert any("Moodboard Flow:" in line for line in chat_lines)
     assert len(captured) == 1
     prompt = captured[0]
@@ -576,8 +758,7 @@ def test_aspect_command_builds_agentic_flow_prompt(monkeypatch):
     app._write_chat = lambda _markup, plain: chat_lines.append(plain)
 
     captured: list[str] = []
-    app._process_message = lambda user_text: captured.append(user_text) or None  # type: ignore[method-assign]
-    app.run_worker = lambda _task, exclusive=False: None
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
 
     source = "75e92a7e-2838-45a7-6f2c-32a5fde6c300"
     handled = app._handle_local_command(
@@ -596,10 +777,11 @@ def test_aspect_command_builds_agentic_flow_prompt(monkeypatch):
     assert "Workflow preference: aspect_ratio_adjustment" in prompt
     assert "Max safe per-step ratio delta (log-space): 0.40" in prompt
     assert "Positive preservation guidance: Keep scene fixed" in prompt
-    assert "Resolve effective upload parent before uploading" in prompt
+    assert "Resolve effective upload parent:" in prompt
     assert "If upload to requested target fails parent/variant validation" in prompt
     assert "independent branch from the same original source image" in prompt
     assert "never use one target branch output as another target's input" in prompt
+    assert "Do not call workflows_params_get, workflows_get, or tool_schema_get" in prompt
     assert "Do not use photarium_import_url(includeData=true) -> photarium_upload_image" in prompt
 
 
@@ -611,8 +793,8 @@ def test_aspectratio_command_parses_target_denoise_and_seed_sweep_words(monkeypa
     app._write_chat = lambda _markup, plain: chat_lines.append(plain)
 
     captured: list[str] = []
-    app._process_message = lambda user_text: captured.append(user_text) or None  # type: ignore[method-assign]
-    app.run_worker = lambda _task, exclusive=False: None
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+    monkeypatch.setattr(app, "_generate_random_seed_values", lambda count: [910001, 910002, 910003])
 
     source = "72494487-4a12-45fb-4084-260e16125000"
     handled = app._handle_local_command(
@@ -626,7 +808,138 @@ def test_aspectratio_command_parses_target_denoise_and_seed_sweep_words(monkeypa
     assert f"Source catalog image ID: {source}" in prompt
     assert "Requested target aspect ratios: 9:16" in prompt
     assert "Denoise override: 1.000" in prompt
-    assert "Seed sweep request: 3 distinct seeds" in prompt
+    assert "Seed sweep request: 910001, 910002, 910003" in prompt
+
+
+def test_aspect_command_accepts_target_without_equals(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "75e92a7e-2838-45a7-6f2c-32a5fde6c300"
+    handled = app._handle_local_command(f"/ar {source} target 4:5")
+
+    assert handled is True
+    assert any("Aspect Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert "Requested target aspect ratios: 4:5" in prompt
+
+
+def test_aspect_command_parses_id_label_prefix(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "b2ae12bc-5419-42bf-ef0f-d8bb83c4d400"
+    handled = app._handle_local_command(f"/ar id {source} target=4:5")
+
+    assert handled is True
+    assert any(f"Aspect Flow: source={source} targets=4:5" == line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert f"Requested upload target image ID: {source}" in prompt
+    assert "Requested target aspect ratios: 4:5" in prompt
+
+
+def test_aspect_command_infers_uuid_from_noisy_prefix(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "09af3c36-0fa7-4ed5-8fd4-f04b9ecf3bc1"
+    handled = app._handle_local_command(f"/ar source id {source} target=4:5")
+
+    assert handled is True
+    assert any(f"Aspect Flow: source={source} targets=4:5" == line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert "Requested target aspect ratios: 4:5" in prompt
+
+
+def test_aspect_command_infers_uuid_when_not_first_token(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "91a23f25-1f08-43d7-922d-13385139f8fd"
+    handled = app._handle_local_command(
+        f"/ar please use source image {source} and keep framing stable target=4:5"
+    )
+
+    assert handled is True
+    assert any(f"Aspect Flow: source={source} targets=4:5" == line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert "Requested target aspect ratios: 4:5" in prompt
+
+
+def test_aspect_command_infers_target_from_natural_language_phrase(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "32cc1cbc-141d-47e3-8373-566c796e6000"
+    handled = app._handle_local_command(
+        f"/ar {source} do an output aspect ratio adjustment of 4:5 and keep the subject centered"
+    )
+
+    assert handled is True
+    assert any("Aspect Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert "Requested target aspect ratios: 4:5" in prompt
+
+
+def test_aspect_command_tolerates_missing_closing_quote_on_targets(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "3f542eab-ad75-4354-6454-d4f045ce2d00"
+    handled = app._handle_local_command(f'/ar {source} targets="4:5 preserve="keep composition stable"')
+
+    assert handled is True
+    assert any("Aspect Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert "Requested target aspect ratios: 4:5" in prompt
 
 
 def test_tanktracks_command_shows_usage_without_image_id(monkeypatch):
@@ -639,7 +952,20 @@ def test_tanktracks_command_shows_usage_without_image_id(monkeypatch):
 
     assert handled is True
     assert any("Tank Tracks Flow Usage" in line for line in chat_lines)
-    assert any("/tanktracks <image_id>" in line for line in chat_lines)
+    assert any("/tanktracks|/tanktrack <image_id>" in line for line in chat_lines)
+
+
+def test_tanktrack_singular_alias_shows_usage_without_image_id(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    handled = app._handle_local_command("/tanktrack")
+
+    assert handled is True
+    assert any("Tank Tracks Flow Usage" in line for line in chat_lines)
+    assert any("/tanktracks|/tanktrack <image_id>" in line for line in chat_lines)
 
 
 def test_tanktracks_command_explicit_help_variants_show_usage(monkeypatch):
@@ -652,7 +978,7 @@ def test_tanktracks_command_explicit_help_variants_show_usage(monkeypatch):
         handled = app._handle_local_command(command)
         assert handled is True
         assert any("Tank Tracks Flow Usage" in line for line in chat_lines)
-        assert any("/tanktracks <image_id>" in line for line in chat_lines)
+        assert any("/tanktracks|/tanktrack <image_id>" in line for line in chat_lines)
 
 
 def test_tanktracks_command_builds_agentic_flow_prompt(monkeypatch):
@@ -663,11 +989,10 @@ def test_tanktracks_command_builds_agentic_flow_prompt(monkeypatch):
     app._write_chat = lambda _markup, plain: chat_lines.append(plain)
 
     captured: list[str] = []
-    app._process_message = lambda user_text: captured.append(user_text) or None  # type: ignore[method-assign]
-    app.run_worker = lambda _task, exclusive=False: None
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
 
     source = "1cc224eb-022b-4ce9-0dd8-3f274f4f4300"
-    handled = app._handle_local_command(f'/tanktracks {source} prompt="Replace wheels with tank tracks"')
+    handled = app._handle_local_command(f"/tanktracks {source}")
 
     assert handled is True
     assert any("Tank Tracks Flow:" in line for line in chat_lines)
@@ -677,12 +1002,305 @@ def test_tanktracks_command_builds_agentic_flow_prompt(monkeypatch):
     assert f"Source catalog image ID: {source}" in prompt
     assert f"Requested upload target image ID: {source}" in prompt
     assert "Workflow preference: add_tank_tracks" in prompt
-    assert "Prompt override: Replace wheels with tank tracks" in prompt
-    assert "Determine source dimensions before running" in prompt
-    assert "workflows_image_info" in prompt
-    assert "source ratio used" in prompt
-    assert "Resolve effective upload parent before uploading" in prompt
+    assert "Prompt behavior: use fixed workflow default prompt (no override)" in prompt
+    assert "Execution rules (add_tank_tracks fast path)" in prompt
+    assert "explicit overrides object" in prompt
+    assert "Do not set aspect_ratio/custom_*" in prompt
+    assert "auto_aspect_ratio_source" in prompt
+    assert "Do not call workflows_capabilities_get" in prompt
+    assert "Resolve effective upload parent: call photarium_get" in prompt
     assert "If upload to requested target fails parent/variant validation" in prompt
+    assert "Post aspect ratio adjustment: none" in prompt
+
+
+def test_tanktracks_command_seed_sweep_enqueues_multiple_runs_with_post_aspect(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    monkeypatch.setattr(app, "_generate_random_seed_values", lambda count: [610001, 610002, 610003, 610004])
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "1cc224eb-022b-4ce9-0dd8-3f274f4f4300"
+    handled = app._handle_local_command(
+        f"/tanktracks {source} runs=4 sweep=seed seed_start=100 post_aspect=4:5"
+    )
+
+    assert handled is True
+    assert any("runs=4 sweep=seed post_aspect=4:5" in line for line in chat_lines)
+    assert len(captured) == 4
+    assert "Run index: 1 of 4" in captured[0]
+    assert "Run index: 4 of 4" in captured[3]
+    assert "Seed override: 610001" in captured[0]
+    assert "Seed override: 610004" in captured[3]
+    assert "Post aspect ratio adjustment: 4:5" in captured[0]
+    assert "workflows_run_aspect_ratio_adjustment" in captured[0]
+    assert any("ignoring seed_start/seed for sweeps" in line for line in chat_lines)
+
+
+def test_tanktracks_rejects_prompt_override(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "1cc224eb-022b-4ce9-0dd8-3f274f4f4300"
+    handled = app._handle_local_command(f'/tanktracks {source} prompt="Do not allow this"')
+
+    assert handled is True
+    assert any("fixed workflow prompt" in line for line in chat_lines)
+    assert captured == []
+
+
+def test_tanktracks_natural_language_seed_sweep_with_aspect_ratio(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    monkeypatch.setattr(app, "_generate_random_seed_values", lambda count: [620001, 620002, 620003])
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "bf694d5f-f7dc-4716-9ff7-c59847bf0f00"
+    handled = app._handle_local_command(
+        f"/tanktracks {source} sweep across 3 seeds at an aspect ratio of 4:5"
+    )
+
+    assert handled is True
+    assert any("runs=3 sweep=seed post_aspect=4:5" in line for line in chat_lines)
+    assert len(captured) == 3
+    assert "Run index: 1 of 3" in captured[0]
+    assert "Run index: 3 of 3" in captured[2]
+    assert "Seed override: 620001" in captured[0]
+    assert "Seed override: 620003" in captured[2]
+    assert "Post aspect ratio adjustment: 4:5" in captured[0]
+    assert "This is a fresh execution request. Always run now" in captured[0]
+
+
+def test_variation_command_shows_usage_without_image_id(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    handled = app._handle_local_command("/vary")
+
+    assert handled is True
+    assert any("Image Variation Flow Usage" in line for line in chat_lines)
+    assert any("/vary|/variation|/variations <image_id>" in line for line in chat_lines)
+
+
+def test_variation_command_explicit_help_variants_show_usage(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    commands = ["/vary help", "/vary -h", "/variation --help", "/variations -h"]
+    for command in commands:
+        chat_lines: list[str] = []
+        app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+        handled = app._handle_local_command(command)
+        assert handled is True
+        assert any("Image Variation Flow Usage" in line for line in chat_lines)
+        assert any("/vary|/variation|/variations <image_id>" in line for line in chat_lines)
+
+
+def test_variation_command_builds_agentic_flow_prompt(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "9e9227cd-2838-45a7-6f2c-32a5fde6c300"
+    handled = app._handle_local_command(
+        f'/vary {source} analysis="Describe materials and lighting" upscale=true'
+    )
+
+    assert handled is True
+    assert any("Variation Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "IMAGE VARIATION FLOW REQUEST" in prompt
+    assert f"Source catalog image ID: {source}" in prompt
+    assert f"Requested upload target image ID: {source}" in prompt
+    assert "Workflow preference: image_variation_maker" in prompt
+    assert "Image analysis prompt: Describe materials and lighting" in prompt
+    assert "Upscale request: enabled" in prompt
+    assert "Update Photarium prompt metadata" in prompt
+
+
+def test_variation_command_parses_run_count_and_prompt_sweep(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "0ee227cd-2838-45a7-6f2c-32a5fde6c300"
+    handled = app._handle_local_command(f"/vary {source} run it 3 times varying the prompt")
+
+    assert handled is True
+    assert any("Variation Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "Requested run count: 3" in prompt
+    assert "Sweep target: prompt" in prompt
+    assert "Additional variation instructions: run it 3 times varying the prompt" in prompt
+    assert "do not choose a single 'best' output" in prompt
+
+
+def test_variation_command_parses_denoise_sweep_values(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "1ae227cd-2838-45a7-6f2c-32a5fde6c300"
+    handled = app._handle_local_command(f"/vary {source} denoise 0.4->0.8 step 0.2")
+
+    assert handled is True
+    assert any("Variation Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "Requested run count: 3" in prompt
+    assert "Sweep target: denoise" in prompt
+    assert "Sweep values: 0.4, 0.6, 0.8" in prompt
+    assert "Upload all successful outputs as Photarium variants" in prompt
+
+
+def test_variation_command_parses_image_id_shorthand_and_numeric_sweep_runs(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    monkeypatch.setattr(app, "_generate_random_seed_values", lambda count: [810001, 810002, 810003, 810004])
+
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "7e278170-a1df-4884-a9ad-5dfdb71e5700"
+    handled = app._handle_local_command(
+        f"/vary image id {source} change the keycaps colors sweep 4 runs with different prompts and different seeds"
+    )
+
+    assert handled is True
+    assert any("Variation Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert f"Requested upload target image ID: {source}" in prompt
+    assert "Requested run count: 4" in prompt
+    assert "Sweep target: seed" in prompt
+    assert "Seed sweep values (randomized): 810001, 810002, 810003, 810004" in prompt
+    assert "Sweep target: 4" not in prompt
+
+
+def test_imageedit_command_shows_usage_without_args(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    handled = app._handle_local_command("/imageedit")
+
+    assert handled is True
+    assert any("Image Edit Flow Usage" in line for line in chat_lines)
+    assert any("/imageedit|/imgedit <image_id>" in line for line in chat_lines)
+
+
+def test_imageedit_command_builds_flow_prompt_with_natural_language(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "75e92a7e-2838-45a7-6f2c-32a5fde6c300"
+    command = f"/imageedit {source} make it look like polished brass with softer studio lighting"
+    handled = app._handle_local_command(command)
+
+    assert handled is True
+    assert any(line == f"Command: {command}" for line in chat_lines)
+    assert any("Image Edit Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert "IMAGE EDIT FLOW REQUEST" in prompt
+    assert f"Source catalog image ID: {source}" in prompt
+    assert f"Requested upload target image ID: {source}" in prompt
+    assert "Workflow preference: image_edit" in prompt
+    assert "Edit request: make it look like polished brass with softer studio lighting" in prompt
+    assert "Post aspect ratio adjustment: none" in prompt
+
+
+def test_imageedit_command_parses_workflow_and_image_id_shorthand(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "7e278170-a1df-4884-a9ad-5dfdb71e5700"
+    handled = app._handle_local_command(
+        f"/imgedit image id {source} workflow=flux_2_klein_4B_prompt_guided_image_edit add graffiti decals and weathering"
+    )
+
+    assert handled is True
+    assert any("Image Edit Flow:" in line for line in chat_lines)
+    assert len(captured) == 1
+    prompt = captured[0]
+    assert f"Source catalog image ID: {source}" in prompt
+    assert "Workflow preference: flux_2_klein_4B_prompt_guided_image_edit" in prompt
+    assert "Edit request: add graffiti decals and weathering" in prompt
+
+
+def test_imageedit_command_seed_sweep_enqueues_multiple_runs_with_post_aspect(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._is_ready = True
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    monkeypatch.setattr(app, "_generate_random_seed_values", lambda count: [710001, 710002, 710003, 710004])
+    captured: list[str] = []
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
+
+    source = "75e92a7e-2838-45a7-6f2c-32a5fde6c300"
+    handled = app._handle_local_command(
+        f"/imageedit {source} workflow=image_edit runs=4 sweep=seed seed_start=500 post_aspect=4:5 make the tracks more industrial and varied"
+    )
+
+    assert handled is True
+    assert any("runs=4 sweep=seed post_aspect=4:5" in line for line in chat_lines)
+    assert len(captured) == 4
+    assert "Run index: 1 of 4" in captured[0]
+    assert "Run index: 4 of 4" in captured[3]
+    assert "Seed override: 710001" in captured[0]
+    assert "Seed override: 710004" in captured[3]
+    assert "Post aspect ratio adjustment: 4:5" in captured[0]
+    assert "workflows_run_aspect_ratio_adjustment" in captured[0]
+    assert any("ignoring seed_start/seed for sweeps" in line for line in chat_lines)
 
 
 def test_importworkflow_command_shows_usage_without_image_id(monkeypatch):
@@ -726,8 +1344,7 @@ def test_importworkflow_command_builds_agentic_flow_prompt(monkeypatch):
     app._write_chat = lambda _markup, plain: chat_lines.append(plain)
 
     captured: list[str] = []
-    app._process_message = lambda user_text: captured.append(user_text) or None  # type: ignore[method-assign]
-    app.run_worker = lambda _task, exclusive=False: None
+    app._enqueue_request = lambda user_text: captured.append(user_text)  # type: ignore[method-assign]
 
     image_id = "b287f5ef-2901-4e27-f6b4-b483fc4a7e00"
     handled = app._handle_local_command(

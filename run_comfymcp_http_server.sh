@@ -10,6 +10,18 @@ if [[ ! -x "$VENV_PY" ]]; then
   exit 1
 fi
 
+# Always execute from repo root so config loaders that reference ".env"
+# resolve the repository's environment file consistently.
+cd "$ROOT_DIR"
+
+# If not already exported by caller, hydrate from repo-local .env.
+if [[ -z "${COMFY_MCP_COMFY_BASE_URL:-}" && -f "$ROOT_DIR/.env" ]]; then
+  comfy_base_from_env_file="$(grep -E '^COMFY_MCP_COMFY_BASE_URL=' "$ROOT_DIR/.env" | tail -n1 | sed 's/^COMFY_MCP_COMFY_BASE_URL=//')"
+  if [[ -n "$comfy_base_from_env_file" ]]; then
+    export COMFY_MCP_COMFY_BASE_URL="$comfy_base_from_env_file"
+  fi
+fi
+
 export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export COMFY_MCP_HTTP_BIND_HOST="${COMFY_MCP_HTTP_BIND_HOST:-127.0.0.1}"
 export COMFY_MCP_HTTP_BIND_PORT="${COMFY_MCP_HTTP_BIND_PORT:-8181}"

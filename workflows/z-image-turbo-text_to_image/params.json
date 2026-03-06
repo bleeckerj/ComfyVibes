@@ -1,41 +1,41 @@
 {
   "schema_version": "1",
   "workflow_id": "z-image-turbo-text_to_image",
-  "workflow_hash": "093c47784c3332fbdfcf3c8d8279d787e738bc25e9fa143165e6a8b1da1cc417",
+  "workflow_hash": "df5228c0415c4a09a9d2954777cffb0e20e57c154c703992f8f0015dd872d21a",
   "params": [
     {
       "name": "seed",
       "type": "int",
-      "default": 642689619278419,
+      "default": 874195323676783,
       "required": false,
       "description": "KSampler.seed",
       "target": {
         "mode": "direct",
-        "node_id": "163",
+        "node_id": "57:3",
         "input": "seed"
       }
     },
     {
       "name": "steps",
       "type": "int",
-      "default": 5,
+      "default": 4,
       "required": false,
       "description": "KSampler.steps",
       "target": {
         "mode": "direct",
-        "node_id": "163",
+        "node_id": "57:3",
         "input": "steps"
       }
     },
     {
       "name": "cfg",
-      "type": "int",
-      "default": 1,
+      "type": "float",
+      "default": 1.0,
       "required": false,
       "description": "KSampler.cfg",
       "target": {
         "mode": "direct",
-        "node_id": "163",
+        "node_id": "57:3",
         "input": "cfg"
       }
     },
@@ -47,32 +47,8 @@
       "description": "KSampler.denoise",
       "target": {
         "mode": "direct",
-        "node_id": "163",
+        "node_id": "57:3",
         "input": "denoise"
-      }
-    },
-    {
-      "name": "height",
-      "type": "int",
-      "default": 1024,
-      "required": false,
-      "description": "EmptySD3LatentImage.height",
-      "target": {
-        "mode": "direct",
-        "node_id": "162",
-        "input": "height"
-      }
-    },
-    {
-      "name": "width",
-      "type": "int",
-      "default": 1024,
-      "required": false,
-      "description": "EmptySD3LatentImage.width",
-      "target": {
-        "mode": "direct",
-        "node_id": "162",
-        "input": "width"
       }
     },
     {
@@ -83,44 +59,56 @@
       "description": "EmptySD3LatentImage.batch_size",
       "target": {
         "mode": "direct",
-        "node_id": "162",
+        "node_id": "57:13",
         "input": "batch_size"
       }
     },
     {
       "name": "prompt",
       "type": "string",
-      "default": "portrait photo of an orange robot, extreme closeup, staring directly at the viewer with intense glowing red eyes set deep in narrow housings, chipped orange plating revealing brushed metal and micro-scratches that catch sharp rim light, subtle grime collected in every seam, braided cables and fine hydraulic lines framing the lower face, dramatic dark background falling into near-black with only faint atmospheric haze outlining the silhouette, powerful cinematic lighting carving bold highlights across the curved armor while deep shadows pool beneath each panel, a subtle ember-like reflection flickering in the eyes adding tension, shallow depth of field isolating the face for maximum impact, gentle film grain enhancing the metallic textures, Nikon D850 with a 50mm f/1.4 lens",
+      "default": "A retro-futuristic military-style MRAPwith the lines of a Ford Bronco with a sleek low-profile purpose-build and equipped aerodynamic truck with advanced surveillance and communication equipment. The Osh-Kosh MRAP has large, off-road tires and a robust frame, suitable for rough terrain. Mounted on top is a complicated and interconnected and sophisticated array of electronic devices, including targeting pods with rotating cameras behing optical glass, laser designators, , high-gain whip antennas, protrusions that look like antennas, and possibly radar or communication systems. The headlights are on and bright LED style illumination. This setup suggests the vehicle is designed for reconnaissance, surveillance, or remote monitoring in challenging environments. The background features a very Nordic sea shore landscape, indicating the vehicle is deployed in a very remote Norwegian or Swedish seaside durng the fall or winter with a light snow fall. It is a rocky shore with ocean tide coming into the gray wet beach. There is a simple white Apple logo on the front radiator grill FX30 Fm2 24mm wide angle lens shallow depth of field tilt-shift visual style.",
       "required": false,
       "description": "CLIP Text Encode (Prompt).text",
       "target": {
         "mode": "direct",
-        "node_id": "6",
+        "node_id": "57:27",
         "input": "text"
       }
     },
     {
       "name": "sampler_name",
       "type": "string",
-      "default": "dpmpp_sde",
+      "default": "res_multistep",
       "required": false,
       "description": "KSampler.sampler_name",
       "target": {
         "mode": "direct",
-        "node_id": "163",
+        "node_id": "57:3",
         "input": "sampler_name"
       }
     },
     {
       "name": "scheduler",
       "type": "string",
-      "default": "beta",
+      "default": "simple",
       "required": false,
       "description": "KSampler.scheduler",
       "target": {
         "mode": "direct",
-        "node_id": "163",
+        "node_id": "57:3",
         "input": "scheduler"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "3:2 (Golden Landscape)",
+      "required": false,
+      "description": "Flux Resolution Calc.aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "62",
+        "input": "aspect_ratio"
       }
     },
     {
@@ -131,8 +119,32 @@
       "description": "Load CLIP.clip_name",
       "target": {
         "mode": "direct",
-        "node_id": "189",
+        "node_id": "57:30",
         "input": "clip_name"
+      }
+    },
+    {
+      "name": "custom_aspect_ratio",
+      "type": "string",
+      "default": "1:1",
+      "required": false,
+      "description": "Flux Resolution Calc.custom_aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "62",
+        "input": "custom_aspect_ratio"
+      }
+    },
+    {
+      "name": "custom_ratio",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "Flux Resolution Calc.custom_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "62",
+        "input": "custom_ratio"
       }
     },
     {
@@ -143,31 +155,55 @@
       "description": "Load CLIP.device",
       "target": {
         "mode": "direct",
-        "node_id": "189",
+        "node_id": "57:30",
         "input": "device"
+      }
+    },
+    {
+      "name": "divisible_by",
+      "type": "string",
+      "default": "64",
+      "required": false,
+      "description": "Flux Resolution Calc.divisible_by",
+      "target": {
+        "mode": "direct",
+        "node_id": "62",
+        "input": "divisible_by"
       }
     },
     {
       "name": "filename_prefix",
       "type": "string",
-      "default": "img",
+      "default": "z-image-turbo",
       "required": false,
-      "description": "Save Image Original.filename_prefix",
+      "description": "Save Image.filename_prefix",
       "target": {
         "mode": "direct",
-        "node_id": "171",
+        "node_id": "9",
         "input": "filename_prefix"
       }
     },
     {
+      "name": "megapixel",
+      "type": "string",
+      "default": "1.0",
+      "required": false,
+      "description": "Flux Resolution Calc.megapixel",
+      "target": {
+        "mode": "direct",
+        "node_id": "62",
+        "input": "megapixel"
+      }
+    },
+    {
       "name": "shift",
-      "type": "int",
-      "default": 3,
+      "type": "float",
+      "default": 3.0,
       "required": false,
       "description": "ModelSamplingAuraFlow.shift",
       "target": {
         "mode": "direct",
-        "node_id": "191",
+        "node_id": "57:11",
         "input": "shift"
       }
     },
@@ -179,7 +215,7 @@
       "description": "Load CLIP.type",
       "target": {
         "mode": "direct",
-        "node_id": "189",
+        "node_id": "57:30",
         "input": "type"
       }
     },
@@ -191,7 +227,7 @@
       "description": "Load Diffusion Model.unet_name",
       "target": {
         "mode": "direct",
-        "node_id": "188",
+        "node_id": "57:28",
         "input": "unet_name"
       }
     },
@@ -203,7 +239,7 @@
       "description": "Load VAE.vae_name",
       "target": {
         "mode": "direct",
-        "node_id": "27",
+        "node_id": "57:29",
         "input": "vae_name"
       }
     },
@@ -215,7 +251,7 @@
       "description": "Load Diffusion Model.weight_dtype",
       "target": {
         "mode": "direct",
-        "node_id": "188",
+        "node_id": "57:28",
         "input": "weight_dtype"
       }
     }

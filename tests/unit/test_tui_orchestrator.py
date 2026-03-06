@@ -227,6 +227,401 @@ class UploadFromPathLLM:
         return await self.chat(messages, tools)
 
 
+@dataclass
+class ToolWindowCaptureLLM:
+    seen_tool_names: list[str] | None = None
+
+    async def chat(self, messages, tools):
+        self.seen_tool_names = [
+            str(tool.get("function", {}).get("name", ""))
+            for tool in tools
+            if isinstance(tool, dict)
+        ]
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class MissingOverridesWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[ToolCall(call_id="wf1", name="workflows_run", arguments={"workflow_id": "image_edit"})],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class MissingOverridesVariationWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(call_id="wf1", name="workflows_run", arguments={"workflow_id": "image_variation_maker"})
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class MissingOverridesStitchWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={"workflow_id": "flux_kontext_multi_image_stitching"},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class FlattenedOverridesWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "workflow_id": "add_tank_tracks",
+                            "image": "/tmp/source.png",
+                            "filename_prefix": "AddTankTracks_test",
+                            "wait_timeout_s": 300,
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class WrappedOverridesWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "input": {
+                                "workflow_id": "add_tank_tracks",
+                                "image": "/tmp/source.png",
+                                "filename_prefix": "AddTankTracks_test",
+                                "wait_timeout_s": 300,
+                            }
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class TokenWrappedOverridesWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "token": {
+                                "workflow_id": "add_tank_tracks",
+                                "image": "/tmp/source.png",
+                                "filename_prefix": "AddTankTracks_test",
+                                "wait_timeout_s": 300,
+                            }
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class TokenStringWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "workflow_id": "add_tank_tracks",
+                            "token": "secret-token",
+                            "image": "/tmp/source.png",
+                            "filename_prefix": "AddTankTracks_test",
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class StringifiedOverridesWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "workflow_id": "add_tank_tracks",
+                            "overrides": '{"image":"/tmp/source.png","filename_prefix":"AddTankTracks_test"}',
+                            "wait_timeout_s": 300,
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class InvalidOverridesTypeWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "workflow_id": "add_tank_tracks",
+                            "overrides": "not-json",
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class MissingOverridesTankTracksWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[ToolCall(call_id="wf1", name="workflows_run", arguments={"workflow_id": "add_tank_tracks"})],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class TankTracksUploadLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="tt1",
+                        name="photarium_upload_from_path",
+                        arguments={
+                            "filePath": "/tmp/out.png",
+                            "name": "AddTankTracks",
+                            "tags": ["existing-tag"],
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class WorkflowRunWithOutputLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "workflow_id": "z-image-turbo-text_to_image",
+                            "overrides": {"prompt": "bar reader", "filename_prefix": "BarReader"},
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class WrappedImportFromArtifactLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="import1",
+                        name="workflows_import_from_artifact",
+                        arguments={
+                            "input": {
+                                "path": "/tmp/ComfyUI_01065.png",
+                                "workflow_id": "qwen-image-edit-nunchaku",
+                            }
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class AliasedImportFromArtifactLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="import1",
+                        name="workflows_import_from_artifact",
+                        arguments={
+                            "artifactPath": "/tmp/ComfyUI_01065.png",
+                            "workflow": "qwen-image-edit-nunchaku",
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+def test_set_tools_repairs_workflows_run_schema_when_overrides_missing():
+    orch = ChatOrchestrator("system", EchoLLM(), FakeRouter())
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"workflow_id": {"type": "string"}},
+                        "required": ["workflow_id"],
+                    },
+                },
+            }
+        ]
+    )
+
+    schema = orch._tool_input_schema_by_name["workflows_run"]
+    assert "overrides" in schema["properties"]
+    assert schema["properties"]["overrides"]["type"] == "object"
+    assert schema["properties"]["overrides"]["additionalProperties"] is True
+    assert "workflow_id" in schema["required"]
+    assert "overrides" in schema["required"]
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_tool_then_answer():
     llm = FakeLLM()
@@ -239,6 +634,25 @@ async def test_orchestrator_tool_then_answer():
     assert len(events) == 1
     assert events[0].name == "workflows.list"
     assert events[0].result == {"name": "workflows.list", "args": {"limit": 1}}
+
+
+def test_orchestrator_detects_unresolved_tool_calls():
+    messages = [
+        {"role": "system", "content": "system"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "workflows.list", "arguments": "{}"},
+                }
+            ],
+        },
+    ]
+    with pytest.raises(RuntimeError, match="Unresolved tool_call_ids"):
+        ChatOrchestrator._assert_no_unresolved_tool_calls(messages)
 
 
 @pytest.mark.asyncio
@@ -602,3 +1016,944 @@ async def test_orchestrator_defaults_upload_namespace_to_cf_default_when_missing
     assert events[0].arguments["namespace"] == "cf-default"
     assert router.last_arguments is not None
     assert router.last_arguments["namespace"] == "cf-default"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_preflights_missing_workflows_run_overrides_using_shorthand_and_photarium_check():
+    llm = MissingOverridesWorkflowRunLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, dict(arguments or {})))
+            if name == "photarium_get":
+                return {"id": "xyz", "namespace": "cf-default"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"imageId": {"type": "string"}},
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("edit image xyz")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert events[0].error is not None
+    assert "missing required 'overrides' object" in events[0].error
+    assert "verified via photarium_get" in events[0].error
+    assert router.calls == [("photarium_get", {"imageId": "xyz"})]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_flattened_workflows_run_overrides():
+    llm = FlattenedOverridesWorkflowRunLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("run tank tracks")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is None
+    assert events[0].arguments == {
+        "workflow_id": "add_tank_tracks",
+        "wait_timeout_s": 300,
+        "overrides": {
+            "image": "/tmp/source.png",
+            "filename_prefix": "AddTankTracks_test",
+        },
+    }
+    assert router.last_arguments == events[0].arguments
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_wrapped_workflows_run_overrides():
+    llm = WrappedOverridesWorkflowRunLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("run tank tracks")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is None
+    assert events[0].arguments == {
+        "workflow_id": "add_tank_tracks",
+        "wait_timeout_s": 300,
+        "overrides": {
+            "image": "/tmp/source.png",
+            "filename_prefix": "AddTankTracks_test",
+        },
+    }
+    assert router.last_arguments == events[0].arguments
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_token_wrapped_workflows_run_overrides():
+    llm = TokenWrappedOverridesWorkflowRunLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("run tank tracks")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is None
+    assert events[0].arguments == {
+        "workflow_id": "add_tank_tracks",
+        "wait_timeout_s": 300,
+        "overrides": {
+            "image": "/tmp/source.png",
+            "filename_prefix": "AddTankTracks_test",
+        },
+    }
+    assert router.last_arguments == events[0].arguments
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_preserves_string_auth_token_when_repairing_workflows_run_overrides():
+    llm = TokenStringWorkflowRunLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "token": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("run tank tracks")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is None
+    assert events[0].arguments == {
+        "workflow_id": "add_tank_tracks",
+        "token": "secret-token",
+        "overrides": {
+            "image": "/tmp/source.png",
+            "filename_prefix": "AddTankTracks_test",
+        },
+    }
+    assert router.last_arguments == events[0].arguments
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_stringified_workflows_run_overrides():
+    llm = StringifiedOverridesWorkflowRunLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("run tank tracks")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is None
+    assert events[0].arguments == {
+        "workflow_id": "add_tank_tracks",
+        "wait_timeout_s": 300,
+        "overrides": {
+            "image": "/tmp/source.png",
+            "filename_prefix": "AddTankTracks_test",
+        },
+    }
+    assert router.last_arguments == events[0].arguments
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_blocks_non_object_workflows_run_overrides():
+    llm = InvalidOverridesTypeWorkflowRunLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("run tank tracks")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is not None
+    assert "overrides' must be an object" in events[0].error
+    assert router.last_name is None
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_tanktracks_workflows_run_missing_overrides_with_download():
+    llm = MissingOverridesTankTracksWorkflowRunLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_download_image":
+                return {"savedPath": "/tmp/tanktracks_source.png"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                            "wait_poll_ms": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process(
+        "TANK TRACKS FLOW REQUEST\n"
+        "Source catalog image ID: 44a4417e-662f-4275-413a-9dba9a6de200\n"
+        "Workflow preference: add_tank_tracks\n"
+    )
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert events[0].error is None
+    assert events[0].arguments["workflow_id"] == "add_tank_tracks"
+    assert events[0].arguments["wait_timeout_s"] == 300
+    assert events[0].arguments["wait_poll_ms"] == 1000
+    assert events[0].arguments["overrides"]["image"] == "/tmp/tanktracks_source.png"
+    assert isinstance(events[0].arguments["overrides"]["filename_prefix"], str)
+    assert events[0].arguments["overrides"]["filename_prefix"].startswith("AddTankTracks_")
+    assert router.calls[0][0] == "photarium_download_image"
+    assert router.calls[1][0] == "workflows_run"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_variation_workflows_run_with_downloaded_source_image():
+    llm = MissingOverridesVariationWorkflowRunLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_download_image":
+                save_path = payload.get("savePath")
+                return {"savedPath": save_path}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process(
+        "IMAGE VARIATION FLOW REQUEST\n"
+        "Source catalog image ID: 7d64bf7b-4cc4-442c-12ba-ab9b24b58e00\n"
+    )
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert events[0].error is None
+    assert events[0].arguments["workflow_id"] == "image_variation_maker"
+    assert "overrides" in events[0].arguments
+    assert "image" in events[0].arguments["overrides"]
+    assert isinstance(events[0].arguments["overrides"]["image"], str)
+    assert events[0].arguments["overrides"]["image"].strip()
+    assert router.calls[0][0] == "photarium_download_image"
+    assert router.calls[0][1]["imageId"] == "7d64bf7b-4cc4-442c-12ba-ab9b24b58e00"
+    assert router.calls[1][0] == "workflows_run"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_stitch_workflows_run_missing_overrides_with_downloads():
+    llm = MissingOverridesStitchWorkflowRunLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_download_image":
+                image_id = str(payload.get("imageId") or "unknown")
+                return {"savedPath": f"/tmp/{image_id}.png"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                            "wait_poll_ms": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    source_1 = "44a4417e-662f-4275-413a-9dba9a6de200"
+    source_2 = "7d64bf7b-4cc4-442c-12ba-ab9b24b58e00"
+    answer, events = await orch.process(
+        "IMAGE STITCHING FLOW REQUEST\n"
+        f"Source catalog image IDs: {source_1}, {source_2}\n"
+        "Workflow preference: flux_kontext_multi_image_stitching\n"
+    )
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert events[0].error is None
+    assert events[0].arguments["workflow_id"] == "flux_kontext_multi_image_stitching"
+    assert events[0].arguments["wait_timeout_s"] == 300
+    assert events[0].arguments["wait_poll_ms"] == 1000
+    assert events[0].arguments["overrides"]["image"] == f"/tmp/{source_1}.png"
+    assert events[0].arguments["overrides"]["image_2"] == f"/tmp/{source_2}.png"
+    assert router.calls[0][0] == "photarium_download_image"
+    assert router.calls[0][1]["imageId"] == source_1
+    assert router.calls[1][0] == "photarium_download_image"
+    assert router.calls[1][1]["imageId"] == source_2
+    assert router.calls[2][0] == "workflows_run"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_auto_uploads_workflow_outputs_from_local_path():
+    llm = WorkflowRunWithOutputLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "workflows_run":
+                return {
+                    "prompt_id": "p-1",
+                    "output_images": [
+                        {
+                            "filename": "BarReader_00001_.png",
+                            "type": "output",
+                            "subfolder": "2026-03-04",
+                            "local_path": "/tmp/BarReader_00001_.png",
+                        }
+                    ],
+                }
+            if name == "photarium_upload_from_path":
+                return {"image_id": "img-123", "namespace": "cf-default"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                            "prompt": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("create z-image prompt bar reader")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert isinstance(events[0].result, dict)
+    assert events[0].result["auto_upload"]["status"] == "uploaded"
+    assert router.calls[0][0] == "workflows_run"
+    assert router.calls[1][0] == "photarium_upload_from_path"
+    assert router.calls[1][1]["filePath"] == "/tmp/BarReader_00001_.png"
+    assert router.calls[1][1]["namespace"] == "cf-default"
+    assert router.calls[1][1]["prompt"] == "bar reader"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_skips_auto_upload_for_tanktracks_flow_request():
+    llm = WorkflowRunWithOutputLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "workflows_run":
+                return {
+                    "prompt_id": "p-1",
+                    "output_images": [
+                        {
+                            "filename": "AddTankTracks_00001_.png",
+                            "type": "output",
+                            "subfolder": "2026-03-04",
+                            "local_path": "/tmp/AddTankTracks_00001_.png",
+                        }
+                    ],
+                }
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process(
+        "TANK TRACKS FLOW REQUEST\n"
+        "Source catalog image ID: 44a4417e-662f-4275-413a-9dba9a6de200\n"
+        "Workflow preference: add_tank_tracks\n"
+    )
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert isinstance(events[0].result, dict)
+    assert events[0].result["auto_upload"]["status"] == "skipped"
+    assert events[0].result["auto_upload"]["reason"] == "tanktracks_flow_handles_upload"
+    assert [name for name, _ in router.calls] == ["workflows_run"]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_auto_upload_downloads_output_when_local_path_missing():
+    llm = WorkflowRunWithOutputLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "workflows_run":
+                return {
+                    "prompt_id": "p-1",
+                    "output_images": [
+                        {
+                            "filename": "BarReader_00001_.png",
+                            "type": "output",
+                            "subfolder": "2026-03-04",
+                        }
+                    ],
+                }
+            if name == "comfy_download_image":
+                return {"local_path": "/tmp/downloaded_BarReader_00001_.png"}
+            if name == "photarium_upload_from_path":
+                return {"image_id": "img-456", "namespace": "cf-default"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "comfy_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "image_type": {"type": "string"},
+                            "subfolder": {"type": "string"},
+                            "save_path": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("create z-image prompt bar reader")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert isinstance(events[0].result, dict)
+    assert events[0].result["auto_upload"]["status"] == "uploaded"
+    assert router.calls[0][0] == "workflows_run"
+    assert router.calls[1][0] == "comfy_download_image"
+    assert router.calls[2][0] == "photarium_upload_from_path"
+    assert router.calls[2][1]["filePath"] == "/tmp/downloaded_BarReader_00001_.png"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_wrapped_workflows_import_from_artifact_arguments():
+    llm = WrappedImportFromArtifactLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_import_from_artifact",
+                    "description": "Import workflow from artifact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "workflow_id": {"type": "string"},
+                        },
+                        "required": ["path", "workflow_id"],
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("import this workflow from artifact")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is None
+    assert events[0].arguments["path"] == "/tmp/ComfyUI_01065.png"
+    assert events[0].arguments["workflow_id"] == "qwen-image-edit-nunchaku"
+    assert router.last_arguments is not None
+    assert router.last_arguments["path"] == "/tmp/ComfyUI_01065.png"
+    assert router.last_arguments["workflow_id"] == "qwen-image-edit-nunchaku"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_aliased_workflows_import_from_artifact_arguments():
+    llm = AliasedImportFromArtifactLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_import_from_artifact",
+                    "description": "Import workflow from artifact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "workflow_id": {"type": "string"},
+                        },
+                        "required": ["path", "workflow_id"],
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("import this workflow from artifact")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].error is None
+    assert events[0].arguments["path"] == "/tmp/ComfyUI_01065.png"
+    assert events[0].arguments["workflow_id"] == "qwen-image-edit-nunchaku"
+    assert router.last_arguments is not None
+    assert router.last_arguments["path"] == "/tmp/ComfyUI_01065.png"
+    assert router.last_arguments["workflow_id"] == "qwen-image-edit-nunchaku"
+
+
+@pytest.mark.asyncio
+async def test_tanktracks_upload_conventions_add_tags_and_preserve_display_name():
+    llm = TankTracksUploadLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload image by local path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tags": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process(
+        "TANK TRACKS FLOW REQUEST\nUpload result as variant.\n"
+    )
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "photarium_upload_from_path"
+    assert router.last_arguments is not None
+    assert "name" not in router.last_arguments
+    assert router.last_arguments["tags"] == [
+        "existing-tag",
+        "tank tracks",
+        "caterpillar tracks",
+        "tracks",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_caps_tool_window_at_api_limit():
+    llm = ToolWindowCaptureLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+
+    tools = []
+    for index in range(150):
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": f"photarium_tool_{index:03d}",
+                    "description": "photarium test tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+    tools.append(
+        {
+            "type": "function",
+            "function": {
+                "name": "workflows_import_from_artifact",
+                "description": "Import workflow from artifact",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    )
+    tools.append(
+        {
+            "type": "function",
+            "function": {
+                "name": "workflows_extract_from_artifact",
+                "description": "Extract workflow from artifact",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    )
+    for index in range(14):
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": f"editorial_tool_{index:03d}",
+                    "description": "editorial test tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+
+    orch.set_tools(tools)
+    answer, events = await orch.process("extract this workflow and add it to the workflow corpus")
+
+    assert answer == "done"
+    assert events == []
+    assert llm.seen_tool_names is not None
+    assert len(llm.seen_tool_names) == 128
+    assert "workflows_import_from_artifact" in llm.seen_tool_names
+    assert "workflows_extract_from_artifact" in llm.seen_tool_names

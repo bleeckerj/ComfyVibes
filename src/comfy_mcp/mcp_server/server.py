@@ -99,6 +99,42 @@ def _list_tool_payloads(
     return {"count": len(tools), "tools": tools}
 
 
+def _filter_supported_kwargs(handler: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop unexpected kwargs unless handler explicitly accepts **kwargs."""
+    signature = inspect.signature(handler)
+    parameters = signature.parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return kwargs
+    allowed = {
+        name
+        for name, parameter in signature.parameters.items()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    camel_aliases = {
+        "".join(part.capitalize() if index else part for index, part in enumerate(name.split("_"))): name
+        for name in allowed
+        if "_" in name
+    }
+
+    def _merge_supported_values(source: Dict[str, Any], target: Dict[str, Any]) -> None:
+        for key, value in source.items():
+            if key in allowed and key not in target:
+                target[key] = value
+                continue
+            alias = camel_aliases.get(key)
+            if alias and alias not in target:
+                target[alias] = value
+
+    normalized = dict(kwargs)
+    _merge_supported_values(kwargs, normalized)
+    for wrapper_key in ("arguments", "args", "input", "payload", "params"):
+        wrapped = kwargs.get(wrapper_key)
+        if not isinstance(wrapped, dict):
+            continue
+        _merge_supported_values(wrapped, normalized)
+    return {key: value for key, value in normalized.items() if key in allowed}
+
+
 def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callable[..., Any] | Callable[..., Awaitable[Any]]]]:
     """Return tool definitions and handlers for both MCP and HTTP servers."""
     try:
@@ -118,6 +154,17 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
             name="comfy_queue_get",
             description="Return ComfyUI queue state.",
             inputSchema=_tool_schema(),
+        ),
+        types.Tool(
+            name="comfy_server_info",
+            description="Return ComfyUI target diagnostics (configured URL, resolved IPs, and queue probe status).",
+            inputSchema=_tool_schema(
+                {
+                    "probe_queue": {"type": "boolean"},
+                    "resolve_dns": {"type": "boolean"},
+                },
+                [],
+            ),
         ),
         types.Tool(
             name="comfy_history_get",
@@ -331,6 +378,30 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
             ),
         ),
         types.Tool(
+            name="workflows_file_read",
+            description="Read a text file under the primary workflows directory.",
+            inputSchema=_tool_schema(
+                {
+                    "file_path": {"type": "string"},
+                    "encoding": {"type": "string"},
+                },
+                ["file_path"],
+            ),
+        ),
+        types.Tool(
+            name="workflows_file_copy",
+            description="Copy a file under the primary workflows directory.",
+            inputSchema=_tool_schema(
+                {
+                    "source_path": {"type": "string"},
+                    "destination_path": {"type": "string"},
+                    "overwrite": {"type": "boolean"},
+                    "token": {"type": "string"},
+                },
+                ["source_path", "destination_path"],
+            ),
+        ),
+        types.Tool(
             name="workflows_file_delete",
             description="Delete a file under the primary workflows directory.",
             inputSchema=_tool_schema(
@@ -523,6 +594,7 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
     handlers: Dict[str, Callable[..., Any] | Callable[..., Awaitable[Any]]] = {
         "comfy_nodes_list": comfy_tools.nodes_list,
         "comfy_queue_get": comfy_tools.queue_get,
+        "comfy_server_info": comfy_tools.server_info,
         "comfy_history_get": comfy_tools.history_get,
         "comfy_models_list": comfy_tools.models_list,
         "comfy_models_get": comfy_tools.models_get,
@@ -550,6 +622,8 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
         "workflows_folder_create": workflow_tools.folder_create,
         "workflows_file_write": workflow_tools.file_write,
         "workflows_file_edit": workflow_tools.file_edit,
+        "workflows_file_read": workflow_tools.file_read,
+        "workflows_file_copy": workflow_tools.file_copy,
         "workflows_file_delete": workflow_tools.file_delete,
         "workflows_save": workflow_tools.save,
         "workflows_delete": workflow_tools.delete,
@@ -587,7 +661,7 @@ def create_server(config: AppConfig):
         handler = handlers.get(name)
         if handler is None:
             return {"error": f"Unknown tool: {name}"}
-        kwargs = arguments or {}
+        kwargs = _filter_supported_kwargs(handler, arguments or {})
         if inspect.iscoroutinefunction(handler):
             return await handler(**kwargs)
         return handler(**kwargs)

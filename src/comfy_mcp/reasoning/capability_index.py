@@ -44,10 +44,30 @@ class CapabilityIndex:
         "retouch",
         "restyle",
         "variant",
+        "variants",
+        "variation",
+        "variations",
+    }
+    _VARIATION_QUERY_TERMS = {
+        "alternate",
+        "alternates",
+        "alternatives",
+        "variation",
+        "variations",
+        "variant",
+        "variants",
+        "vary",
+        "varied",
     }
     _IMAGE_EDIT_TAGS = {"image-edit", "img2img"}
+    _VARIATION_TAGS = {"variation", "variations", "variant", "variants"}
     _IMAGE_EDIT_PREFERRED_WORKFLOWS = {
         "flux_2_klein_4B": 2.5,
+    }
+    _VARIATION_PREFERRED_WORKFLOWS = {
+        "image_variation_maker": 4.5,
+        "flux_2_klein_4B_image_to_image_variations": 3.0,
+        "flux_2_klein_4B_variations": 2.5,
     }
 
     _heuristic_keys = (
@@ -74,6 +94,7 @@ class CapabilityIndex:
         needle = query.strip().lower()
         query_tokens = self._search_tokens(query)
         image_edit_intent = self._has_image_edit_intent(query)
+        variation_intent = self._has_variation_intent(query)
         tag_filter = [tag.lower() for tag in (tags or [])]
         ranked: List[tuple[float, Dict[str, Any]]] = []
 
@@ -88,8 +109,14 @@ class CapabilityIndex:
             blob = self._search_blob(card)
             matched_tokens = sum(1 for token in query_tokens if token in blob)
             exact_match = bool(needle) and needle in blob
+            variation_boost = (
+                self._variation_priority_boost(card)
+                if variation_intent
+                else 0.0
+            )
             if needle and not exact_match and matched_tokens == 0:
-                continue
+                if not (variation_intent and variation_boost > 0):
+                    continue
 
             score = 0.0
             if needle:
@@ -97,6 +124,8 @@ class CapabilityIndex:
                 score += matched_tokens / max(1, len(query_tokens))
             if image_edit_intent:
                 score += self._image_edit_priority_boost(card)
+            if variation_intent:
+                score += variation_boost
             ranked.append((score, card))
 
         ranked.sort(key=lambda item: (-item[0], item[1]["workflow_id"]))
@@ -198,6 +227,14 @@ class CapabilityIndex:
         return "image edit" in query_text or "edit image" in query_text
 
     @classmethod
+    def _has_variation_intent(cls, query: str) -> bool:
+        tokens = set(cls._search_tokens(query))
+        if any(token in tokens for token in cls._VARIATION_QUERY_TERMS):
+            return True
+        query_text = query.lower()
+        return "image variation" in query_text or "image variants" in query_text
+
+    @classmethod
     def _image_edit_priority_boost(cls, card: Dict[str, Any]) -> float:
         boost = 0.0
         workflow_id = str(card.get("workflow_id") or "")
@@ -213,4 +250,19 @@ class CapabilityIndex:
         if any("prompt" in name for name in params):
             boost += 0.4
         boost += cls._IMAGE_EDIT_PREFERRED_WORKFLOWS.get(workflow_id, 0.0)
+        return boost
+
+    @classmethod
+    def _variation_priority_boost(cls, card: Dict[str, Any]) -> float:
+        boost = 0.0
+        workflow_id = str(card.get("workflow_id") or "")
+        tags = {str(tag).lower() for tag in card.get("tags", [])}
+        text_blob = (
+            f"{workflow_id} {card.get('name', '')} {card.get('description', '')}".lower()
+        )
+        if tags.intersection(cls._VARIATION_TAGS):
+            boost += 1.5
+        if any(token in text_blob for token in ("variation", "variant", "vary")):
+            boost += 0.6
+        boost += cls._VARIATION_PREFERRED_WORKFLOWS.get(workflow_id, 0.0)
         return boost

@@ -8,6 +8,7 @@ import base64
 from copy import deepcopy
 import os
 import re
+import shutil
 import tempfile
 import time
 import httpx
@@ -78,11 +79,28 @@ class WorkflowTools:
         "variation",
         "variations",
     }
+    _VARIATION_QUERY_TERMS = {
+        "alternate",
+        "alternates",
+        "alternatives",
+        "variation",
+        "variations",
+        "variant",
+        "variants",
+        "vary",
+        "varied",
+    }
     _IMAGE_EDIT_TAGS = {"image-edit", "img2img"}
+    _VARIATION_TAGS = {"variation", "variations", "variant", "variants"}
     _IMAGE_EDIT_PREFERRED_WORKFLOWS = {
         # True img2img (latent-init) for "variations" style requests.
         "flux_2_klein_4B_variations": 4.0,
         "flux_2_klein_4B": 2.5,
+    }
+    _VARIATION_PREFERRED_WORKFLOWS = {
+        "image_variation_maker": 4.5,
+        "flux_2_klein_4B_image_to_image_variations": 3.0,
+        "flux_2_klein_4B_variations": 2.5,
     }
     _FLOAT_FRIENDLY_NUMERIC_FIELDS = {
         "cfg",
@@ -238,6 +256,14 @@ class WorkflowTools:
         return "image edit" in query_text or "edit image" in query_text
 
     @classmethod
+    def _has_variation_intent(cls, query: str) -> bool:
+        tokens = set(cls._search_tokens(query))
+        if any(token in tokens for token in cls._VARIATION_QUERY_TERMS):
+            return True
+        query_text = query.lower()
+        return "image variation" in query_text or "image variants" in query_text
+
+    @classmethod
     def _image_edit_priority_boost(
         cls,
         *,
@@ -254,6 +280,25 @@ class WorkflowTools:
         if "edit" in text_blob:
             boost += 0.5
         boost += cls._IMAGE_EDIT_PREFERRED_WORKFLOWS.get(workflow_id, 0.0)
+        return boost
+
+    @classmethod
+    def _variation_priority_boost(
+        cls,
+        *,
+        workflow_id: str,
+        name: str,
+        description: str,
+        tags: list[str],
+    ) -> float:
+        boost = 0.0
+        tag_set = {str(tag).lower() for tag in tags}
+        if tag_set.intersection(cls._VARIATION_TAGS):
+            boost += 1.5
+        text_blob = f"{workflow_id} {name} {description}".lower()
+        if any(token in text_blob for token in ("variation", "variant", "vary")):
+            boost += 0.6
+        boost += cls._VARIATION_PREFERRED_WORKFLOWS.get(workflow_id, 0.0)
         return boost
 
     @staticmethod
@@ -310,6 +355,7 @@ class WorkflowTools:
         normalized_query = self._normalize_search_text(query)
         query_tokens = self._search_tokens(query)
         image_edit_intent = self._has_image_edit_intent(query)
+        variation_intent = self._has_variation_intent(query)
         tag_filter = [tag.lower() for tag in (tags or [])]
         ranked_results: list[tuple[float, Dict[str, Any]]] = []
 
@@ -342,14 +388,29 @@ class WorkflowTools:
                 if image_edit_intent
                 else 0.0
             )
+            variation_boost = (
+                self._variation_priority_boost(
+                    workflow_id=entry.workflow_id,
+                    name=name,
+                    description=description,
+                    tags=meta_tags,
+                )
+                if variation_intent
+                else 0.0
+            )
 
             if not exact_match and matched_tokens < required_matches:
-                if not (image_edit_intent and intent_boost > 0):
+                if not (
+                    (image_edit_intent and intent_boost > 0)
+                    or (variation_intent and variation_boost > 0)
+                ):
                     continue
 
             score = 1.0 if exact_match else (matched_tokens / max(1, len(query_tokens)))
             if image_edit_intent:
                 score += intent_boost
+            if variation_intent:
+                score += variation_boost
             ranked_results.append(
                 (
                     score,
@@ -676,6 +737,42 @@ class WorkflowTools:
             raise ValueError(f"File not found: {file_path}")
         target.unlink()
         return {"deleted": True, "path": str(target)}
+
+    def file_read(
+        self,
+        file_path: str,
+        encoding: str = "utf-8",
+    ) -> Dict[str, Any]:
+        """Read a text file under the primary workflows directory."""
+        target = self._resolve_under_root(file_path)
+        if not target.exists() or not target.is_file():
+            raise ValueError(f"File not found: {file_path}")
+        content = target.read_text(encoding=encoding)
+        return {
+            "path": str(target),
+            "encoding": encoding,
+            "size_bytes": target.stat().st_size,
+            "content": content,
+        }
+
+    def file_copy(
+        self,
+        source_path: str,
+        destination_path: str,
+        overwrite: bool = False,
+        token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Copy a file under the primary workflows directory."""
+        self._policy.enforce_mutation(token)
+        source = self._resolve_under_root(source_path)
+        destination = self._resolve_under_root(destination_path)
+        if not source.exists() or not source.is_file():
+            raise ValueError(f"Source file not found: {source_path}")
+        if destination.exists() and not overwrite:
+            raise ValueError(f"Destination file already exists: {destination_path}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return {"copied": True, "source_path": str(source), "destination_path": str(destination)}
 
     def save(
         self,

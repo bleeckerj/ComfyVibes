@@ -22,6 +22,8 @@ Both launchers:
 4. Ensure Backoffice MCP HTTP is reachable (starts it if needed)
 5. Launch the TUI client
 
+Digester MCP is configured as a stdio server inside `mcp_chat_config.json` (not an HTTP preflight server), so it starts when the TUI connects.
+
 `run_mcp_chat.sh` actions:
 
 - `./run_mcp_chat.sh` or `./run_mcp_chat.sh start`: ensure servers + launch TUI
@@ -80,6 +82,17 @@ Optional related vars:
 
 The TUI tool client reads MCP endpoints from `mcp_chat_config.json`.
 You must keep these URLs aligned with your chosen ports.
+
+You can mix HTTP and stdio MCP servers in the same config. Digester is typically configured as stdio:
+
+```json
+{
+  "name": "digester",
+  "command": "/Users/julian/Code/Digester/.venv/bin/python",
+  "args": ["mcp_digester_server.py"],
+  "cwd": "/Users/julian/Code/Digester"
+}
+```
 
 Edit `servers[].http_url`:
 
@@ -151,6 +164,18 @@ Check listeners:
 
 ```bash
 ./run_mcp_processes.sh status
+```
+
+Stop background servers:
+
+```bash
+./run_mcp_chat.sh stop
+```
+
+Stop servers automatically when you exit the TUI:
+
+```bash
+MCP_CHAT_STOP_SERVERS_ON_EXIT=1 ./run_mcp_chat.sh
 ```
 
 Reset both servers:

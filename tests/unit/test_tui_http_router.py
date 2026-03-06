@@ -37,6 +37,21 @@ async def test_http_router_surfaces_json_error_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_http_router_enriches_missing_workflows_run_overrides_error() -> None:
+    router = HTTPToolRouter([])
+    router._client = _FakeClient(httpx.Response(400, json={"ok": False, "error": "Field required: overrides"}))
+    router._tool_map["workflows_run"] = _HTTPServerState(
+        name="comfy",
+        base_url="http://127.0.0.1:8181",
+        prefixes=[],
+        tools=[],
+    )
+
+    with pytest.raises(RuntimeError, match="explicit overrides object"):
+        await router.call_tool("workflows_run", {"workflow_id": "image_edit"})
+
+
+@pytest.mark.asyncio
 async def test_http_router_unwraps_success_envelope() -> None:
     router = HTTPToolRouter([])
     router._client = _FakeClient(httpx.Response(200, json={"ok": True, "result": {"status": "complete"}}))

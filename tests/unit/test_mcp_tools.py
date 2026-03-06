@@ -161,6 +161,12 @@ async def test_comfy_tools_read_methods() -> None:
     assert await tools.models_list() == ["checkpoints"]
     assert await tools.models_get("checkpoints") == ["model.safetensors"]
     assert await tools.embeddings_list() == ["embeddingA"]
+    server_info = await tools.server_info()
+    assert server_info["configured_base_url"] == "http://127.0.0.1:8188"
+    assert server_info["target"]["host"] == "127.0.0.1"
+    assert server_info["target"]["host_is_ip"] is True
+    assert server_info["probe"]["ok"] is True
+    assert server_info["probe"]["endpoint"].endswith("/queue")
 
 
 @pytest.mark.asyncio
@@ -1399,6 +1405,22 @@ def test_workflow_tools_file_operations(tmp_path: Path) -> None:
     payload = json.loads(workflow_path.read_text(encoding="utf-8"))
     assert payload["meta"]["name"] == "Demo"
 
+    read = tools.file_read("custom/new-workflow/workflow.json")
+    assert read["path"] == str(workflow_path)
+    assert read["encoding"] == "utf-8"
+    assert read["content"]
+    assert json.loads(read["content"])["meta"]["name"] == "Demo"
+
+    copied = tools.file_copy(
+        "custom/new-workflow/workflow.json",
+        "custom/new-workflow/workflow-copy.json",
+    )
+    assert copied["copied"] is True
+    copied_path = tmp_path / "custom" / "new-workflow" / "workflow-copy.json"
+    assert copied_path.exists()
+    copied_payload = json.loads(copied_path.read_text(encoding="utf-8"))
+    assert copied_payload["meta"]["name"] == "Demo"
+
     deleted = tools.file_delete("custom/new-workflow/workflow.json")
     assert deleted["deleted"] is True
     assert not workflow_path.exists()
@@ -1412,3 +1434,7 @@ def test_workflow_tools_file_operations_reject_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="escapes workflows root"):
         tools.file_write("../outside.json", {"x": 1})
+    with pytest.raises(ValueError, match="escapes workflows root"):
+        tools.file_read("../outside.json")
+    with pytest.raises(ValueError, match="escapes workflows root"):
+        tools.file_copy("../outside.json", "copy.json")
