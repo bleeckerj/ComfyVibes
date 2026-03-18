@@ -99,6 +99,38 @@ class RepeatingToolLLM:
 
 
 @dataclass
+class RepeatingSignalLookupLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        return LLMResponse(
+            content="I will keep looking up this signal id.",
+            tool_calls=[
+                ToolCall(
+                    call_id=f"sig_lookup_{self.calls}",
+                    name="editorial_signals_get_text",
+                    arguments={
+                        "signal_id": "abc123missing",
+                        "max_string_chars": 2000 if self.calls % 2 == 0 else 12000,
+                        "include_raw": self.calls % 3 == 0,
+                    },
+                )
+            ],
+        )
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class SignalNotFoundRouter:
+    async def call_tool(self, name, arguments):
+        signal_id = (arguments or {}).get("signal_id", "unknown")
+        raise RuntimeError(f"Error: Signal not found: {signal_id}")
+
+
+@dataclass
 class ColorSearchLLM:
     calls: int = 0
 
@@ -113,6 +145,61 @@ class ColorSearchLLM:
 
     async def chat_stream(self, messages, tools, on_token=None):
         return await self.chat(messages, tools)
+
+
+@dataclass
+class PreviewToolLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="prev1",
+                        name="editorial_ads_preview",
+                        arguments={"adIds": ["a", "b"], "mode": "catalog"},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class LargePreviewResultRouter:
+    async def call_tool(self, name, arguments):
+        # Intentionally place the URL fields late so a naive truncate-from-start
+        # would drop them from the LLM tool window.
+        return {
+            "criteria": {
+                "contextPreview": {
+                    "resolvedPath": "/features/issue/1/example",
+                    "title": "Example",
+                    "dek": "Example dek",
+                    "paragraphs": ["x" * 50_000],
+                }
+            },
+            "selectedIds": ["a", "b"],
+            "previewUrl": "http://127.0.0.1:8788/ads/preview?ids=a,b&limit=2",
+            "previewUrls": {
+                "catalog": "http://127.0.0.1:8788/ads/preview?ids=a,b&limit=2",
+                "single": "http://127.0.0.1:8788/ads/preview/a",
+            },
+        }
+
+
+@dataclass
+class StrictNoCallLLM:
+    async def chat(self, messages, tools):
+        raise AssertionError("LLM should not be called for strict preview commands")
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        raise AssertionError("LLM should not be called for strict preview commands")
 
 
 @dataclass
@@ -142,6 +229,22 @@ class SemanticSearchLLM:
 
     async def chat_stream(self, messages, tools, on_token=None):
         return await self.chat(messages, tools)
+
+
+@dataclass
+class SequenceRouter:
+    responses: list
+    calls: list[tuple[str, dict]] | None = None
+
+    def __post_init__(self):
+        if self.calls is None:
+            self.calls = []
+
+    async def call_tool(self, name, arguments):
+        self.calls.append((name, dict(arguments or {})))
+        if not self.responses:
+            return {}
+        return self.responses.pop(0)
 
 
 @dataclass
@@ -542,6 +645,36 @@ class WorkflowRunWithOutputLLM:
 
 
 @dataclass
+class WorkflowRunWithSourceImageLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="wf1",
+                        name="workflows_run",
+                        arguments={
+                            "workflow_id": "flux_2_klein_4B_prompt_guided_image_edit",
+                            "overrides": {
+                                "image": "/tmp/source-image.png",
+                                "prompt": "make it foggy",
+                                "filename_prefix": "FoggyEdit",
+                            },
+                        },
+                    )
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
 class WrappedImportFromArtifactLLM:
     calls: int = 0
 
@@ -722,6 +855,155 @@ async def test_orchestrator_truncates_large_tool_content():
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_compacts_editorial_preview_tool_for_llm():
+    llm = PreviewToolLLM()
+    router = LargePreviewResultRouter()
+    orch = ChatOrchestrator(
+        "system",
+        llm,
+        router,
+        max_non_system_messages=20,
+        max_total_content_chars=200_000,
+        max_message_content_chars=1000,
+        max_tool_content_chars=220,
+    )
+    orch.set_tools([])
+
+    answer, _events = await orch.process("preview ads")
+    assert answer == "done"
+
+    tool_messages = [m for m in orch._messages if m.get("role") == "tool"]
+    assert tool_messages
+    # The compacted payload should keep previewUrl visible even with a tight tool window.
+    assert "previewUrl" in tool_messages[-1]["content"]
+    assert "127.0.0.1:8788/ads/preview" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_strict_preview_ad_by_index_bypasses_llm_and_returns_tool_result_only():
+    llm = StrictNoCallLLM()
+    router = SequenceRouter(
+        responses=[
+            {
+                "previewUrl": "http://127.0.0.1:8788/ads/preview/resonance-field-expedition-01",
+                "selectedIds": ["resonance-field-expedition-01"],
+            }
+        ]
+    )
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "editorial_ads_preview_by_index",
+                    "description": "Preview ad by inventory index",
+                    "parameters": {"type": "object", "properties": {"index": {"type": "integer"}}},
+                },
+            }
+        ]
+    )
+
+    answer, events = await orch.process("preview ad 53", stop_after_tool_calls=True)
+
+    assert answer is None
+    assert len(events) == 1
+    assert events[0].name == "editorial_ads_preview_by_index"
+    assert router.calls == [("editorial_ads_preview_by_index", {"index": 53})]
+
+
+@pytest.mark.asyncio
+async def test_strict_preview_ad_by_index_fails_closed_when_valid_index_has_no_preview_url():
+    llm = StrictNoCallLLM()
+    router = SequenceRouter(
+        responses=[
+            {},
+            {"items": [{"id": f"ad-{i:03d}"} for i in range(1, 54)]},
+        ]
+    )
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "editorial_ads_preview_by_index",
+                    "description": "Preview ad by inventory index",
+                    "parameters": {"type": "object", "properties": {"index": {"type": "integer"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "editorial_ads_list_inventory",
+                    "description": "List ad inventory",
+                    "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}},
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("preview ad 53")
+
+    assert answer == (
+        "Strict preview command failed: preview tool returned no preview URL "
+        "for valid inventory index 53."
+    )
+    assert [event.name for event in events] == [
+        "editorial_ads_preview_by_index",
+        "editorial_ads_list_inventory",
+    ]
+    assert router.calls == [
+        ("editorial_ads_preview_by_index", {"index": 53}),
+        ("editorial_ads_list_inventory", {"limit": 53}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_strict_preview_ad_by_id_does_not_autocorrect_and_returns_unknown_for_missing_id():
+    llm = StrictNoCallLLM()
+    router = SequenceRouter(
+        responses=[
+            {},
+            {},
+        ]
+    )
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "editorial_ads_preview",
+                    "description": "Preview ad by id",
+                    "parameters": {"type": "object", "properties": {"adId": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "editorial_ads_get_json",
+                    "description": "Get ad JSON by id",
+                    "parameters": {"type": "object", "properties": {"adId": {"type": "string"}}},
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("preview ad fashion-8-bit-pants-skyscraper")
+
+    assert answer == "Unknown ad id: fashion-8-bit-pants-skyscraper."
+    assert [event.name for event in events] == [
+        "editorial_ads_preview",
+        "editorial_ads_get_json",
+    ]
+    assert router.calls == [
+        ("editorial_ads_preview", {"adId": "fashion-8-bit-pants-skyscraper"}),
+        ("editorial_ads_get_json", {"adId": "fashion-8-bit-pants-skyscraper"}),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_pruning_preserves_tool_call_sequence_integrity():
     llm = BurstToolLLM()
     router = LargeResultRouter()
@@ -784,6 +1066,25 @@ async def test_orchestrator_stops_repeated_identical_tool_rounds():
 
     assert answer is not None
     assert "Stopped repeated identical tool-call rounds" in answer
+    assert len(events) >= 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_stops_repeated_signal_not_found_lookup_loops():
+    llm = RepeatingSignalLookupLLM()
+    router = SignalNotFoundRouter()
+    orch = ChatOrchestrator(
+        "system",
+        llm,
+        router,
+        max_rounds=20,
+    )
+    orch.set_tools([])
+
+    answer, events = await orch.process("open this signal")
+
+    assert answer is not None
+    assert "Stopped repeated signal lookup failures" in answer
     assert len(events) >= 2
 
 
@@ -1073,6 +1374,144 @@ async def test_orchestrator_preflights_missing_workflows_run_overrides_using_sho
     assert "missing required 'overrides' object" in events[0].error
     assert "verified via photarium_get" in events[0].error
     assert router.calls == [("photarium_get", {"imageId": "xyz"})]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_synthesizes_missing_workflows_run_overrides_for_text_to_image() -> None:
+    llm = MissingOverridesWorkflowRunLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, dict(arguments or {})))
+            if name == "workflows_params_get":
+                return {
+                    "params": {
+                        "params": [
+                            {"name": "prompt", "type": "string"},
+                            {"name": "seed", "type": "int"},
+                            {"name": "filename_prefix", "type": "string"},
+                        ]
+                    }
+                }
+            if name == "workflows_run":
+                return {"ok": True}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_params_get",
+                    "description": "Get workflow params",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"workflow_id": {"type": "string"}},
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"imageId": {"type": "string"}},
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process('create an image using prompt: "retro diner in rain"')
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert events[0].error is None
+    assert isinstance(events[0].arguments.get("overrides"), dict)
+    overrides = events[0].arguments["overrides"]
+    assert overrides.get("prompt") == "retro diner in rain"
+    assert isinstance(overrides.get("seed"), int)
+    assert isinstance(overrides.get("filename_prefix"), str)
+    assert overrides["filename_prefix"].startswith("image_edit_")
+    assert [name for name, _ in router.calls] == ["workflows_params_get", "workflows_run"]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_keeps_missing_overrides_block_for_image_input_workflow() -> None:
+    llm = MissingOverridesWorkflowRunLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, dict(arguments or {})))
+            if name == "workflows_params_get":
+                return {"params": {"params": [{"name": "image", "type": "string"}, {"name": "seed", "type": "int"}]}}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_params_get",
+                    "description": "Get workflow params",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"workflow_id": {"type": "string"}},
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("edit image xyz")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert events[0].error is not None
+    assert "missing required 'overrides' object" in events[0].error
+    assert [name for name, _ in router.calls] == ["workflows_params_get"]
 
 
 @pytest.mark.asyncio
@@ -1783,6 +2222,214 @@ async def test_orchestrator_auto_upload_downloads_output_when_local_path_missing
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_auto_uploads_workflow_outputs_as_variants_of_source_image():
+    llm = WorkflowRunWithSourceImageLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "workflows_run":
+                return {
+                    "prompt_id": "p-2",
+                    "output_images": [
+                        {
+                            "filename": "FoggyEdit_00001_.png",
+                            "type": "output",
+                            "subfolder": "2026-03-06",
+                            "local_path": "/tmp/FoggyEdit_00001_.png",
+                        }
+                    ],
+                }
+            if name == "photarium_get":
+                return {
+                    "id": "src-123",
+                    "namespace": "cf-autotrader",
+                    "parentId": "family-root-999",
+                }
+            if name == "photarium_upload_from_path":
+                return {"image_id": "img-789", "namespace": "cf-autotrader"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                            "parentId": {"type": "string"},
+                            "prompt": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+    orch._record_source_image_local_path("/tmp/source-image.png", "src-123")
+
+    answer, events = await orch.process(
+        "IMAGE EDIT FLOW REQUEST\n"
+        "Source catalog image ID: src-123\n"
+        "Workflow preference: flux_2_klein_4B_prompt_guided_image_edit\n"
+    )
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert isinstance(events[0].result, dict)
+    assert events[0].result["auto_upload"]["status"] == "uploaded"
+    assert router.calls[0][0] == "workflows_run"
+    assert router.calls[1][0] == "photarium_get"
+    assert router.calls[2][0] == "photarium_upload_from_path"
+    assert router.calls[2][1]["filePath"] == "/tmp/FoggyEdit_00001_.png"
+    assert router.calls[2][1]["parentId"] == "family-root-999"
+    assert router.calls[2][1]["namespace"] == "cf-autotrader"
+    assert router.calls[2][1]["prompt"] == "make it foggy"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_auto_upload_uses_family_root_when_source_is_variant_without_parent_id():
+    llm = WorkflowRunWithSourceImageLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "workflows_run":
+                return {
+                    "prompt_id": "p-3",
+                    "output_images": [
+                        {
+                            "filename": "FoggyEdit_00001_.png",
+                            "type": "output",
+                            "subfolder": "2026-03-06",
+                            "local_path": "/tmp/FoggyEdit_00001_.png",
+                        }
+                    ],
+                }
+            if name == "photarium_get":
+                return {
+                    "id": "src-variant-123",
+                    "namespace": "cf-autotrader",
+                    "isVariant": True,
+                    "parentId": None,
+                    "familyRootId": "family-root-555",
+                }
+            if name == "photarium_upload_from_path":
+                return {"image_id": "img-790", "namespace": "cf-autotrader"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload path",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                            "parentId": {"type": "string"},
+                            "prompt": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+    orch._record_source_image_local_path("/tmp/source-image.png", "src-variant-123")
+
+    answer, events = await orch.process(
+        "IMAGE EDIT FLOW REQUEST\n"
+        "Source catalog image ID: src-variant-123\n"
+        "Workflow preference: flux_2_klein_4B_prompt_guided_image_edit\n"
+    )
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert isinstance(events[0].result, dict)
+    assert events[0].result["auto_upload"]["status"] == "uploaded"
+    assert router.calls[1][0] == "photarium_get"
+    assert router.calls[2][0] == "photarium_upload_from_path"
+    assert router.calls[2][1]["parentId"] == "family-root-555"
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_repairs_wrapped_workflows_import_from_artifact_arguments():
     llm = WrappedImportFromArtifactLLM()
     router = RecordingRouter(result_payload={"ok": True})
@@ -1957,3 +2604,112 @@ async def test_orchestrator_caps_tool_window_at_api_limit():
     assert len(llm.seen_tool_names) == 128
     assert "workflows_import_from_artifact" in llm.seen_tool_names
     assert "workflows_extract_from_artifact" in llm.seen_tool_names
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_retrieves_tool_by_description_and_params_under_cap():
+    llm = ToolWindowCaptureLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+
+    tools = []
+    for index in range(200):
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": f"photarium_tool_{index:03d}",
+                    "description": "Generic catalog utility",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+    tools.append(
+        {
+            "type": "function",
+            "function": {
+                "name": "misc_resume_lookup",
+                "description": "Resolve lineage entries using resume token",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "resume_token": {"type": "string"},
+                        "lineage_run_id": {"type": "string"},
+                    },
+                },
+            },
+        }
+    )
+
+    orch.set_tools(tools)
+    answer, events = await orch.process("find resume token for this lineage run")
+
+    assert answer == "done"
+    assert events == []
+    assert llm.seen_tool_names is not None
+    assert len(llm.seen_tool_names) == 128
+    assert "misc_resume_lookup" in llm.seen_tool_names
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_uses_recent_context_for_tool_window_selection():
+    llm = ToolWindowCaptureLLM()
+    router = RecordingRouter(result_payload={"ok": True})
+    orch = ChatOrchestrator("system", llm, router)
+
+    tools = []
+    for index in range(180):
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": f"photarium_tool_{index:03d}",
+                    "description": "photarium test tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+    tools.extend(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "digester_digests_get",
+                    "description": "Get digest by id",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "digester_get_signal",
+                    "description": "Get signal text",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "digester_signals_create",
+                    "description": "Create signal",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ]
+    )
+    orch.set_tools(tools)
+    orch._messages.append(
+        {
+            "role": "assistant",
+            "content": (
+                "I will create one signal from the digest item using digester_signals_create."
+            ),
+        }
+    )
+
+    answer, events = await orch.process("1 and use the digest title")
+
+    assert answer == "done"
+    assert events == []
+    assert llm.seen_tool_names is not None
+    assert "digester_signals_create" in llm.seen_tool_names

@@ -283,9 +283,36 @@ class ComfyClient:
         try:
             response = await self._client.post(path, json=payload)
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ComfyClientError(self._format_http_error(exc)) from exc
         except httpx.HTTPError as exc:
             raise ComfyClientError(f"ComfyUI request failed: {exc}") from exc
         return response.json()
+
+    @staticmethod
+    def _format_http_error(exc: httpx.HTTPStatusError) -> str:
+        response = exc.response
+        detail = ""
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                error_obj = payload.get("error")
+                if isinstance(error_obj, dict):
+                    parts = [
+                        str(error_obj.get("type") or "").strip(),
+                        str(error_obj.get("message") or "").strip(),
+                        str(error_obj.get("details") or "").strip(),
+                    ]
+                    detail = " | ".join(part for part in parts if part)
+                elif isinstance(error_obj, str):
+                    detail = error_obj.strip()
+                if not detail:
+                    detail = json.dumps(payload, ensure_ascii=True)
+        except Exception:
+            body = response.text or ""
+            detail = body.strip()
+        base = f"ComfyUI request failed: {exc}"
+        return f"{base} | body={detail}" if detail else base
 
     def _build_ws_url(self, client_id: Optional[str] = None) -> str:
         parsed = urlparse(self._base_url)

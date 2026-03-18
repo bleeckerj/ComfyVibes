@@ -192,6 +192,30 @@ def test_normalize_photarium_upload_arguments_overwrites_existing_immutable_file
     assert normalized["immutable_filename"] == "ValidDisplayName"
 
 
+def test_normalize_photarium_upload_arguments_strips_non_semantic_generation_tags() -> None:
+    args = {
+        "name": "EditorialPortrait",
+        "tags": ["fashion", "denoise-0.7", "cfg-1", "steps-8", "image-edit", "editorial"],
+    }
+    schema = {"type": "object", "properties": {"name": {"type": "string"}, "tags": {"type": "array"}}}
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_from_path", args, schema)
+
+    assert normalized["tags"] == ["fashion", "editorial"]
+
+
+def test_normalize_photarium_upload_arguments_removes_string_tag_field_when_only_generation_tags_exist() -> None:
+    args = {
+        "title": "EditorialPortrait",
+        "tag_names": "denoise-0.7, seed-1234, workflow",
+    }
+    schema = {"type": "object", "properties": {"title": {"type": "string"}, "tag_names": {"type": "string"}}}
+
+    normalized = normalize_photarium_upload_arguments("photarium_upload_from_path", args, schema)
+
+    assert "tag_names" not in normalized
+
+
 def test_normalize_binary_transfer_arguments_disables_import_include_data_by_default() -> None:
     args = {
         "url": "http://127.0.0.1:8188/view?filename=Sample_00001_.png&type=output",

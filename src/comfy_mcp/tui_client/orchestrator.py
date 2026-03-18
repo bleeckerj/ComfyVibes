@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
-import os
 import re
-import tempfile
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Protocol
-from urllib.parse import parse_qs, unquote, urlparse
 
-import httpx
-
+from comfy_mcp.tui_client.binary_transfer_adapter import BinaryTransferAdapter, is_photarium_like_upload_tool
+from comfy_mcp.tui_client.tool_argument_preflight import ToolArgumentPreflight
 from comfy_mcp.tui_client.llm_client import LLMResponse, ToolCall
+from comfy_mcp.tui_client.image_namespace_registry import ImageNamespaceRegistry
 from comfy_mcp.tui_client.sanitize import sanitize_result
 from comfy_mcp.tui_client.search_semantics import (
     normalize_binary_transfer_arguments,
@@ -24,6 +20,9 @@ from comfy_mcp.tui_client.search_semantics import (
     normalize_search_tool_arguments,
     normalize_search_tool_result,
 )
+from comfy_mcp.tui_client.tool_loop import ToolLoop
+from comfy_mcp.tui_client.tool_selection import ToolSelector
+from comfy_mcp.tui_client.workflow_tool_repairs import WorkflowToolRepairService
 from comfy_mcp.tui_client.workflows_schema import ensure_workflows_run_schema
 
 
@@ -49,8 +48,16 @@ class ToolEvent:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class StrictCommand:
+    kind: str
+    target: str
+    target_is_index: bool = False
+
+
 class ChatOrchestrator:
     _MAX_TOOLS_PER_LLM_REQUEST = 128
+    _STRICT_PREVIEW_AD_RE = re.compile(r"^\s*preview\s+ad\s+(.+?)\s*$", re.IGNORECASE)
 
     def __init__(
         self,
@@ -76,15 +83,103 @@ class ChatOrchestrator:
         self._max_rounds = max_rounds
         self._max_repeated_tool_rounds = max_repeated_tool_rounds
         self._tool_input_schema_by_name: Dict[str, Dict[str, Any]] = {}
-        self._image_namespace_by_id: Dict[str, str] = {}
+        self._image_namespaces = ImageNamespaceRegistry()
+        self._source_image_id_by_local_path: Dict[str, str] = {}
         self._tool_execution_lock = asyncio.Lock()
+        self._workflow_tool_repairs = WorkflowToolRepairService()
+        self._binary_transfer_adapter = BinaryTransferAdapter()
+        self._tool_argument_preflight = ToolArgumentPreflight(
+            self._workflow_tool_repairs,
+            self._binary_transfer_adapter,
+        )
+        self._last_tool_selection_debug: Dict[str, int] = {}
+
+    @staticmethod
+    def _compact_tool_result_for_llm(tool_name: str, result: Any) -> Any:
+        """Return a compact, URL-first tool result for LLM context when needed.
+
+        Some tools (notably `editorial_ads_preview`) can include large contextual blobs
+        (e.g. preview framing paragraphs). Those can cause the tool message to be
+        truncated, which can drop the actual preview URL from the LLM-visible context.
+        This compactor preserves the "what you need next" fields at the top.
+        """
+        if tool_name not in {"editorial_ads_preview", "editorial_ads_preview_by_index"}:
+            return result
+        if not isinstance(result, dict):
+            return result
+
+        preview_url = result.get("previewUrl") or result.get("preview_url")
+        preview_urls = result.get("previewUrls") or result.get("preview_urls")
+
+        compact: Dict[str, Any] = {
+            "mode": result.get("mode"),
+            "previewUrl": preview_url,
+            "previewUrls": preview_urls,
+            "selectedIds": result.get("selectedIds"),
+            "missingRequestedIds": result.get("missingRequestedIds"),
+            "inventoryPath": result.get("inventoryPath"),
+            "fit": result.get("fit"),
+            "actualAspect": result.get("actualAspect"),
+            "layoutPreview": result.get("layoutPreview"),
+            "matched": result.get("matched"),
+            "total": result.get("total"),
+        }
+
+        criteria = result.get("criteria")
+        if isinstance(criteria, dict):
+            criteria_compact: Dict[str, Any] = {
+                "adIds": criteria.get("adIds"),
+                "search": criteria.get("search"),
+                "slot": criteria.get("slot"),
+                "limit": criteria.get("limit"),
+                "fit": criteria.get("fit"),
+                "actualAspect": criteria.get("actualAspect"),
+                "layoutPreview": criteria.get("layoutPreview"),
+                "contextPath": criteria.get("contextPath"),
+            }
+            context_preview = criteria.get("contextPreview")
+            if isinstance(context_preview, dict):
+                criteria_compact["contextPreview"] = {
+                    "resolvedPath": context_preview.get("resolvedPath"),
+                    "title": context_preview.get("title"),
+                    "dek": context_preview.get("dek"),
+                }
+            compact["criteria"] = criteria_compact
+
+        items = result.get("items")
+        if isinstance(items, list) and items:
+            compact_items: List[Dict[str, Any]] = []
+            for raw in items[:12]:
+                if not isinstance(raw, dict):
+                    continue
+                compact_items.append(
+                    {
+                        "id": raw.get("id"),
+                        "slot": raw.get("slot"),
+                        "previewUrl": raw.get("previewUrl"),
+                    }
+                )
+            if compact_items:
+                compact["items"] = compact_items
+
+        # Keep a small hint for debugging without bloating the window.
+        compact["_llm_compacted"] = True
+        return compact
 
     def reset_conversation(self) -> None:
         """Reset conversation to just the system prompt."""
         if not self._messages:
             return
         self._messages = [self._messages[0]]
-        self._image_namespace_by_id = {}
+        self._image_namespaces.reset()
+
+    def set_system_prompt(self, system_prompt: str) -> None:
+        """Update the active system prompt without clearing conversation history."""
+        if self._messages:
+            self._messages[0] = {"role": "system", "content": system_prompt}
+            return
+        self._messages = [{"role": "system", "content": system_prompt}]
+        self._source_image_id_by_local_path = {}
 
     def status_snapshot(self) -> Dict[str, int]:
         """Return lightweight conversation stats for UI diagnostics."""
@@ -112,7 +207,20 @@ class ChatOrchestrator:
                     function["parameters"] = parameters
                 self._tool_input_schema_by_name[name] = parameters
 
+    def set_router(self, router: RouterProtocol) -> None:
+        """Swap the active router implementation (e.g. after toggling servers)."""
+        self._router = router
+
     async def process(
+        self,
+        user_text: str,
+        on_progress: Callable[[str, Dict[str, Any]], None] | None = None,
+        stop_after_tool_calls: bool = False,
+    ) -> tuple[str | None, List[ToolEvent]]:
+        loop = ToolLoop(self)
+        return await loop.process(user_text=user_text, on_progress=on_progress, stop_after_tool_calls=stop_after_tool_calls)
+
+    async def _process_loop(
         self,
         user_text: str,
         on_progress: Callable[[str, Dict[str, Any]], None] | None = None,
@@ -130,9 +238,23 @@ class ChatOrchestrator:
 
         self._append_message({"role": "user", "content": user_text})
         tool_events: List[ToolEvent] = []
+        strict_command = self._match_strict_command(user_text)
+        if strict_command is not None:
+            return await self._execute_strict_command(
+                strict_command,
+                user_text=user_text,
+                tool_events=tool_events,
+                on_progress=on_progress,
+                stop_after_tool_calls=stop_after_tool_calls,
+            )
         round_num = 0
         repeated_tool_rounds = 0
         previous_tool_signature: tuple[tuple[str, str], ...] | None = None
+        repeated_signal_lookup_key: str | None = None
+        repeated_signal_lookup_rounds = 0
+        expanded_tool_retry_used = False
+        force_full_tool_window_next_round = False
+        expanded_retry_reason: str | None = None
 
         while True:
             round_num += 1
@@ -154,7 +276,21 @@ class ChatOrchestrator:
             def _on_token(text: str) -> None:
                 _emit_progress("llm_token", {"text": text, "round": round_num})
 
-            tools_for_request = self._select_tools_for_user_text(user_text)
+            use_full_tool_window = force_full_tool_window_next_round
+            force_full_tool_window_next_round = False
+            tools_for_request = self._select_tools_for_user_text(
+                user_text,
+                force_all=use_full_tool_window,
+            )
+            if use_full_tool_window:
+                _emit_progress(
+                    "llm_tools_retry_expanded",
+                    {
+                        "reason": expanded_retry_reason or "unknown",
+                        "tool_count": len(tools_for_request),
+                    },
+                )
+                expanded_retry_reason = None
             if len(tools_for_request) < len(self._tools):
                 selected_names = {self._tool_name(tool) for tool in tools_for_request}
                 dropped_names = [
@@ -169,6 +305,7 @@ class ChatOrchestrator:
                         "total_count": len(self._tools),
                         "dropped_count": len(dropped_names),
                         "dropped_examples": [name for name in dropped_names[:8] if name],
+                        "selection_debug": dict(self._last_tool_selection_debug),
                     },
                 )
             response = await self._llm.chat_stream(
@@ -217,6 +354,13 @@ class ChatOrchestrator:
                     previous_tool_signature = tool_signature
 
                 if repeated_tool_rounds >= self._max_repeated_tool_rounds:
+                    if not expanded_tool_retry_used and len(self._tools) > self._MAX_TOOLS_PER_LLM_REQUEST:
+                        expanded_tool_retry_used = True
+                        force_full_tool_window_next_round = True
+                        expanded_retry_reason = "repeated_tool_calls"
+                        repeated_tool_rounds = 0
+                        previous_tool_signature = None
+                        continue
                     tool_names = ", ".join(call.name for call in response.tool_calls)
                     message = (
                         "Stopped repeated identical tool-call rounds to avoid a loop. "
@@ -246,6 +390,7 @@ class ChatOrchestrator:
                         ],
                     }
                 )
+                round_tool_events: list[ToolEvent] = []
                 for call, arguments in prepared_calls:
                     event = ToolEvent(name=call.name, arguments=arguments)
                     execute_name = call.name
@@ -288,9 +433,11 @@ class ChatOrchestrator:
                             except Exception:
                                 pass
                     tool_events.append(event)
+                    round_tool_events.append(event)
                     # Sanitize result for LLM context — strip base64 blobs
                     # so they don't blow up the token window.
                     sanitized = sanitize_result(result, tool_name=call.name, save_artifacts=True)
+                    sanitized = self._compact_tool_result_for_llm(call.name, sanitized)
                     self._append_message(
                         {
                             "role": "tool",
@@ -299,6 +446,39 @@ class ChatOrchestrator:
                             "content": self._safe_json_dumps(sanitized, separators=(",", ":")),
                         }
                     )
+
+                signal_lookup_key = self._signal_lookup_failure_round_key(round_tool_events)
+                if signal_lookup_key:
+                    if signal_lookup_key == repeated_signal_lookup_key:
+                        repeated_signal_lookup_rounds += 1
+                    else:
+                        repeated_signal_lookup_key = signal_lookup_key
+                        repeated_signal_lookup_rounds = 1
+
+                    if repeated_signal_lookup_rounds >= 2:
+                        if not expanded_tool_retry_used and len(self._tools) > self._MAX_TOOLS_PER_LLM_REQUEST:
+                            expanded_tool_retry_used = True
+                            force_full_tool_window_next_round = True
+                            expanded_retry_reason = "signal_lookup_failures"
+                            repeated_signal_lookup_key = None
+                            repeated_signal_lookup_rounds = 0
+                            continue
+                        message = (
+                            "Stopped repeated signal lookup failures for the same identifier. "
+                            f"'{signal_lookup_key}' appears to be unresolved as a signal_id. "
+                            "If this is a digest id/path, fetch the digest first and then create a signal "
+                            "with digester_signals_create."
+                        )
+                        self._append_message({"role": "assistant", "content": message})
+                        _emit_progress(
+                            "complete",
+                            {"assistant_text": message, "loop_guard": "signal_lookup_failures"},
+                        )
+                        return message, tool_events
+                else:
+                    repeated_signal_lookup_key = None
+                    repeated_signal_lookup_rounds = 0
+
                 if stop_after_tool_calls:
                     _emit_progress("complete", {"assistant_text": None, "stopped_after_tools": True})
                     return None, tool_events
@@ -309,24 +489,268 @@ class ChatOrchestrator:
                 _emit_progress("complete", {"assistant_text": response.content})
                 return response.content, tool_events
 
+            if (
+                not expanded_tool_retry_used
+                and len(tools_for_request) < len(self._tools)
+                and len(self._tools) > self._MAX_TOOLS_PER_LLM_REQUEST
+            ):
+                expanded_tool_retry_used = True
+                force_full_tool_window_next_round = True
+                expanded_retry_reason = "empty_response_after_trimmed_window"
+                continue
+
             _emit_progress("complete", {"assistant_text": None})
             return None, tool_events
 
-    def _select_tools_for_user_text(self, user_text: str) -> List[Dict[str, Any]]:
-        if len(self._tools) <= self._MAX_TOOLS_PER_LLM_REQUEST:
-            return self._tools
+    @classmethod
+    def _match_strict_command(cls, user_text: str) -> StrictCommand | None:
+        match = cls._STRICT_PREVIEW_AD_RE.match(user_text or "")
+        if not match:
+            return None
+        raw_target = (match.group(1) or "").strip()
+        if not raw_target:
+            return None
+        normalized = raw_target
+        if normalized.startswith("#"):
+            normalized = normalized[1:].strip()
+        if normalized.isdigit():
+            return StrictCommand(kind="preview_ad", target=normalized, target_is_index=True)
+        return StrictCommand(kind="preview_ad", target=normalized, target_is_index=False)
 
-        text = (user_text or "").lower()
-        recent_tool_names = self._recent_tool_names()
-        ranked: list[tuple[int, int, Dict[str, Any]]] = []
+    async def _execute_strict_command(
+        self,
+        command: StrictCommand,
+        *,
+        user_text: str,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+        stop_after_tool_calls: bool,
+    ) -> tuple[str | None, List[ToolEvent]]:
+        if command.kind == "preview_ad":
+            return await self._execute_strict_preview_ad(
+                command,
+                user_text=user_text,
+                tool_events=tool_events,
+                on_progress=on_progress,
+                stop_after_tool_calls=stop_after_tool_calls,
+            )
+        message = f"Strict command not implemented: {command.kind}"
+        self._append_message({"role": "assistant", "content": message})
+        if on_progress:
+            on_progress("complete", {"assistant_text": message, "strict_command": command.kind})
+        return message, tool_events
 
-        for index, tool in enumerate(self._tools):
-            name = self._tool_name(tool)
-            score = self._tool_priority(name=name, text=text, recent_tool_names=recent_tool_names)
-            ranked.append((score, index, tool))
+    async def _execute_strict_preview_ad(
+        self,
+        command: StrictCommand,
+        *,
+        user_text: str,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+        stop_after_tool_calls: bool,
+    ) -> tuple[str | None, List[ToolEvent]]:
+        del user_text
+        if command.target_is_index:
+            preview_tool = "editorial_ads_preview_by_index"
+            if preview_tool not in self._tool_input_schema_by_name:
+                message = "Strict preview command unavailable: editorial_ads_preview_by_index is not exposed."
+                self._append_message({"role": "assistant", "content": message})
+                if on_progress:
+                    on_progress("complete", {"assistant_text": message, "strict_command": "preview_ad"})
+                return message, tool_events
 
-        ranked.sort(key=lambda item: (-item[0], item[1]))
-        return [tool for _, _, tool in ranked[: self._MAX_TOOLS_PER_LLM_REQUEST]]
+            preview_result = await self._run_strict_tool_call(
+                preview_tool,
+                {"index": int(command.target)},
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+            preview_url = self._extract_preview_url(preview_result)
+            if preview_url:
+                if on_progress:
+                    on_progress("complete", {"assistant_text": None, "strict_command": "preview_ad"})
+                return (None if stop_after_tool_calls else preview_url), tool_events
+
+            inventory_tool = "editorial_ads_list_inventory"
+            if inventory_tool in self._tool_input_schema_by_name:
+                inventory_result = await self._run_strict_tool_call(
+                    inventory_tool,
+                    {"limit": int(command.target)},
+                    tool_events=tool_events,
+                    on_progress=on_progress,
+                )
+                if self._inventory_has_index(inventory_result, int(command.target)):
+                    message = (
+                        "Strict preview command failed: preview tool returned no preview URL "
+                        f"for valid inventory index {command.target}."
+                    )
+                else:
+                    message = f"Invalid ad index: {command.target}."
+                self._append_message({"role": "assistant", "content": message})
+                if on_progress:
+                    on_progress("complete", {"assistant_text": message, "strict_command": "preview_ad"})
+                return message, tool_events
+
+            message = (
+                "Strict preview command failed: preview tool returned no preview URL and "
+                "inventory verification tool is unavailable."
+            )
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "preview_ad"})
+            return message, tool_events
+
+        preview_tool = "editorial_ads_preview"
+        if preview_tool not in self._tool_input_schema_by_name:
+            message = "Strict preview command unavailable: editorial_ads_preview is not exposed."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "preview_ad"})
+            return message, tool_events
+        preview_result = await self._run_strict_tool_call(
+            preview_tool,
+            {"adId": command.target},
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        preview_url = self._extract_preview_url(preview_result)
+        if preview_url:
+            if on_progress:
+                on_progress("complete", {"assistant_text": None, "strict_command": "preview_ad"})
+            return (None if stop_after_tool_calls else preview_url), tool_events
+
+        verify_tool = "editorial_ads_get_json"
+        if verify_tool in self._tool_input_schema_by_name:
+            verify_result = await self._run_strict_tool_call(
+                verify_tool,
+                {"adId": command.target},
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+            if isinstance(verify_result, dict) and verify_result:
+                message = (
+                    "Strict preview command failed: preview tool returned no preview URL "
+                    f"for valid ad id {command.target}."
+                )
+            else:
+                message = f"Unknown ad id: {command.target}."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "preview_ad"})
+            return message, tool_events
+
+        message = (
+            "Strict preview command failed: preview tool returned no preview URL and "
+            "ad verification tool is unavailable."
+        )
+        self._append_message({"role": "assistant", "content": message})
+        if on_progress:
+            on_progress("complete", {"assistant_text": message, "strict_command": "preview_ad"})
+        return message, tool_events
+
+    async def _run_strict_tool_call(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+    ) -> Any:
+        call_id = f"strict_{tool_name}_{len(tool_events) + 1}"
+        self._append_message(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": self._safe_json_dumps(arguments),
+                        },
+                    }
+                ],
+            }
+        )
+        if on_progress:
+            on_progress("tool_call_start", {"name": tool_name, "arguments": arguments})
+        event = ToolEvent(name=tool_name, arguments=dict(arguments))
+        try:
+            async with self._tool_execution_lock:
+                raw_result = await self._router.call_tool(tool_name, arguments)
+            result = normalize_search_tool_result(tool_name, raw_result)
+            self._record_image_namespaces_from_result(result)
+            event.result = result
+            if on_progress:
+                on_progress("tool_call_result", {"name": tool_name, "result": result})
+        except Exception as exc:  # pragma: no cover
+            event.error = str(exc)
+            result = {"error": event.error}
+            if on_progress:
+                on_progress("tool_call_error", {"name": tool_name, "error": event.error})
+        tool_events.append(event)
+        sanitized = sanitize_result(result, tool_name=tool_name, save_artifacts=True)
+        sanitized = self._compact_tool_result_for_llm(tool_name, sanitized)
+        self._append_message(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": tool_name,
+                "content": self._safe_json_dumps(sanitized, separators=(",", ":")),
+            }
+        )
+        return result
+
+    @staticmethod
+    def _extract_preview_url(result: Any) -> str | None:
+        if not isinstance(result, dict):
+            return None
+        for key in ("previewUrl", "preview_url"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        preview_urls = result.get("previewUrls") or result.get("preview_urls")
+        if isinstance(preview_urls, dict):
+            for candidate in ("catalog", "single", "default"):
+                value = preview_urls.get(candidate)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            for value in preview_urls.values():
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    @staticmethod
+    def _inventory_has_index(result: Any, index: int) -> bool:
+        if not isinstance(result, dict):
+            return False
+        items = result.get("items")
+        if isinstance(items, list):
+            return len(items) >= index
+        ads = result.get("ads")
+        if isinstance(ads, list):
+            return len(ads) >= index
+        return False
+
+    def _select_tools_for_user_text(self, user_text: str, *, force_all: bool = False) -> List[Dict[str, Any]]:
+        if force_all:
+            self._last_tool_selection_debug = {
+                "query_token_count": 0,
+                "lexical_match_count": len(self._tools),
+                "index_candidate_count": len(self._tools),
+                "fallback_added_count": 0,
+            }
+            return list(self._tools)
+        selector = ToolSelector(self._tools)
+        selected = selector.select_tools_for_user_text(
+            user_text=user_text,
+            recent_tool_names=self._recent_tool_names(),
+            max_tools_per_request=self._MAX_TOOLS_PER_LLM_REQUEST,
+            context_text=self._recent_context_text(),
+        )
+        self._last_tool_selection_debug = dict(selector.last_selection_debug)
+        return selected
 
     def _recent_tool_names(self) -> set[str]:
         names: set[str] = set()
@@ -338,51 +762,61 @@ class ChatOrchestrator:
                 names.add(name)
         return names
 
+    def _recent_context_text(self, *, max_messages: int = 10, max_chars: int = 8_000) -> str:
+        snippets: list[str] = []
+        for message in reversed(self._messages):
+            if len(snippets) >= max_messages:
+                break
+            role = message.get("role")
+            if role not in {"user", "assistant"}:
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                snippets.append(content.strip())
+        if not snippets:
+            return ""
+        snippets.reverse()
+        merged = "\n".join(snippets)
+        if len(merged) > max_chars:
+            return merged[-max_chars:]
+        return merged
+
+    @classmethod
+    def _signal_lookup_failure_round_key(cls, events: List[ToolEvent]) -> str | None:
+        if not events:
+            return None
+        expected_tools = {"digester_get_signal", "editorial_signals_get", "editorial_signals_get_text"}
+        if any(event.name not in expected_tools for event in events):
+            return None
+        missing_keys: set[str] = set()
+        for event in events:
+            signal_id = cls._extract_missing_signal_id(event.error)
+            if not signal_id:
+                return None
+            normalized = signal_id.strip()
+            if normalized.endswith(".json"):
+                normalized = normalized[:-5]
+            missing_keys.add(normalized)
+        if len(missing_keys) != 1:
+            return None
+        return next(iter(missing_keys))
+
+    @staticmethod
+    def _extract_missing_signal_id(error_text: str | None) -> str | None:
+        if not error_text:
+            return None
+        match = re.search(r"Signal not found:\s*([^\n]+)", error_text)
+        if not match:
+            return None
+        return match.group(1).strip()
+
     @staticmethod
     def _tool_name(tool: Dict[str, Any]) -> str:
-        function = tool.get("function")
-        if not isinstance(function, dict):
-            return ""
-        name = function.get("name")
-        if isinstance(name, str):
-            return name
-        return ""
+        return ToolSelector.tool_name(tool)
 
     @staticmethod
     def _tool_priority(name: str, text: str, recent_tool_names: set[str]) -> int:
-        if not name:
-            return -10_000
-
-        score = 0
-        if name in recent_tool_names:
-            score += 120
-        if name in {"list_tools", "tool_schema_get"}:
-            score += 55
-        if name in text:
-            score += 300
-
-        if name.startswith("workflows_"):
-            score += 35
-            if any(term in text for term in ("workflow", "corpus", "extract", "import", "package", "metadata")):
-                score += 140
-        elif name.startswith("comfy_"):
-            score += 25
-            if any(term in text for term in ("comfy", "comfyui", "queue", "history", "node", "model")):
-                score += 120
-        elif name.startswith("photarium_") or name.startswith("catalog_"):
-            score += 20
-            if any(term in text for term in ("photarium", "catalog", "image id", "namespace", "upload", "variant")):
-                score += 120
-        elif name.startswith("editorial_"):
-            score += 10
-            if any(term in text for term in ("editorial", "copy", "headline", "brief", "ad")):
-                score += 120
-        elif name.startswith("backoffice_"):
-            score += 10
-            if any(term in text for term in ("backoffice", "ticket", "crm", "finance")):
-                score += 120
-
-        return score
+        return ToolSelector.tool_priority(name=name, text=text, recent_tool_names=recent_tool_names)
 
     def _append_message(self, message: Dict[str, Any]) -> None:
         self._messages.append(message)
@@ -522,37 +956,12 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> tuple[str, Dict[str, Any], Path | None]:
-        if tool_name == "workflows_run":
-            arguments = self._repair_workflows_run_arguments(arguments)
-            arguments = await self._repair_stitching_workflows_run_arguments(
-                tool_name,
-                arguments,
-                user_text=user_text,
-            )
-            arguments = await self._repair_tanktracks_workflows_run_arguments(
-                tool_name,
-                arguments,
-                user_text=user_text,
-            )
-            arguments = await self._repair_variation_workflows_run_arguments(
-                tool_name,
-                arguments,
-                user_text=user_text,
-            )
-        arguments = self._repair_workflows_import_from_artifact_arguments(tool_name, arguments, user_text=user_text)
-        await self._preflight_workflows_run_arguments(tool_name, arguments, user_text=user_text)
-        self._preflight_workflows_import_from_artifact_arguments(tool_name, arguments)
-        transformed = await self._maybe_convert_upload_url_to_from_path(
+        return await self._tool_argument_preflight.prepare_tool_execution(
+            self,
             tool_name,
             arguments,
             user_text=user_text,
         )
-        if transformed is not None:
-            exec_name, exec_args, temp_file = transformed
-            exec_args = self._apply_tanktracks_upload_conventions(exec_name, exec_args, user_text=user_text)
-            return exec_name, exec_args, temp_file
-        arguments = self._apply_tanktracks_upload_conventions(tool_name, arguments, user_text=user_text)
-        return tool_name, arguments, None
 
     async def _preflight_workflows_run_arguments(
         self,
@@ -561,110 +970,16 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> None:
-        if tool_name != "workflows_run":
-            return
-        if not isinstance(arguments, dict):
-            raise RuntimeError("workflows_run preflight failed: arguments must be an object")
-        overrides = arguments.get("overrides")
-        if isinstance(overrides, dict):
-            return
-        if "overrides" in arguments:
-            raise RuntimeError("workflows_run preflight blocked: 'overrides' must be an object.")
-
-        shorthand_image_id = self._extract_shorthand_edit_image_id(user_text)
-        verified_hint = ""
-        if shorthand_image_id:
-            verified = await self._verify_photarium_image_id_candidate(shorthand_image_id)
-            if verified:
-                verified_hint = (
-                    f" The shorthand target '{shorthand_image_id}' appears to be a valid Photarium image ID "
-                    "(verified via photarium_get)."
-                )
-
-        raise RuntimeError(
-            "workflows_run preflight blocked: missing required 'overrides' object."
-            f"{verified_hint} Convert shorthand intent into explicit tool args first "
-            "(for example: photarium_get -> download image -> workflows_run with "
-            '{"workflow_id":"...","overrides":{"image":"<local_path_or_comfy_filename>"}}).'
+        await self._workflow_tool_repairs.preflight_workflows_run_arguments(
+            self,
+            tool_name,
+            arguments,
+            user_text=user_text,
         )
 
     @staticmethod
     def _repair_workflows_run_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Auto-wrap flattened workflows_run override keys into an explicit overrides object.
-
-        Models sometimes produce a valid intent but omit the nested `overrides` wrapper,
-        e.g. {"workflow_id":"x","image":"...","filename_prefix":"..."}.
-        Repairing that locally avoids a wasted retry round.
-        """
-        if not isinstance(arguments, dict):
-            return arguments
-        repaired: Dict[str, Any] = dict(arguments)
-
-        # Flatten nested wrappers that some model/tool bridges emit.
-        # Some bridges have also been observed to stash the full payload under
-        # `token`; only unwrap it when it is an object, never when it is the
-        # normal auth token string.
-        wrapper_keys = ("arguments", "args", "input", "payload", "params", "token")
-        flattened_wrapper_keys: set[str] = set()
-        for wrapper_key in wrapper_keys:
-            wrapped = repaired.get(wrapper_key)
-            if not isinstance(wrapped, dict):
-                continue
-            flattened_wrapper_keys.add(wrapper_key)
-            for key, value in wrapped.items():
-                repaired.setdefault(key, value)
-        for wrapper_key in flattened_wrapper_keys:
-            repaired.pop(wrapper_key, None)
-
-        # Canonicalize common alias keys.
-        aliases = (
-            ("workflow", "workflow_id"),
-            ("workflowId", "workflow_id"),
-            ("id", "workflow_id"),
-            ("clientId", "client_id"),
-            ("waitTimeoutS", "wait_timeout_s"),
-            ("waitPollMs", "wait_poll_ms"),
-        )
-        for alias, canonical in aliases:
-            if canonical not in repaired and alias in repaired:
-                repaired[canonical] = repaired[alias]
-            if alias != canonical and canonical in repaired:
-                repaired.pop(alias, None)
-
-        # Best-effort parse when overrides arrives as a JSON string.
-        overrides_value = repaired.get("overrides")
-        if isinstance(overrides_value, str):
-            parsed: Any = None
-            try:
-                parsed = json.loads(overrides_value)
-            except Exception:
-                parsed = None
-            if isinstance(parsed, dict):
-                repaired["overrides"] = parsed
-
-        if "workflow_id" not in repaired or "overrides" in repaired:
-            return repaired
-
-        control_keys = {
-            "workflow_id",
-            "client_id",
-            "token",
-            "force",
-            "wait_timeout_s",
-            "wait_poll_ms",
-        }
-        overrides: Dict[str, Any] = {}
-        normalized: Dict[str, Any] = {}
-        for key, value in repaired.items():
-            if key in control_keys:
-                normalized[key] = value
-            else:
-                overrides[key] = value
-
-        if not overrides:
-            return repaired
-        normalized["overrides"] = overrides
-        return normalized
+        return WorkflowToolRepairService.repair_workflows_run_arguments(arguments)
 
     async def _repair_stitching_workflows_run_arguments(
         self,
@@ -673,86 +988,12 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> Dict[str, Any]:
-        """Best-effort repair for stitch workflows missing required workflows_run overrides."""
-        if tool_name != "workflows_run" or not isinstance(arguments, dict):
-            return arguments
-
-        workflow_id = str(arguments.get("workflow_id") or "").strip()
-        if not self._is_stitching_workflow(workflow_id):
-            return arguments
-
-        if "overrides" in arguments and not isinstance(arguments.get("overrides"), dict):
-            return arguments
-
-        repaired = dict(arguments)
-        existing_overrides = repaired.get("overrides")
-        repaired_overrides = dict(existing_overrides) if isinstance(existing_overrides, dict) else {}
-
-        # Normalize common alias keys into canonical stitch params.
-        alias_map = (
-            ("input_image", "image"),
-            ("inputImage", "image"),
-            ("input_image_1", "image"),
-            ("inputImage1", "image"),
-            ("image_1", "image"),
-            ("image1", "image"),
-            ("left_image", "image"),
-            ("source_image", "image"),
-            ("sourceImage", "image"),
-            ("reference_image", "image"),
-            ("reference_image_1", "image"),
-            ("input_image_2", "image_2"),
-            ("inputImage2", "image_2"),
-            ("image2", "image_2"),
-            ("right_image", "image_2"),
-            ("second_image", "image_2"),
-            ("source_image_2", "image_2"),
-            ("sourceImage2", "image_2"),
-            ("reference_image_2", "image_2"),
+        return await self._workflow_tool_repairs.repair_stitching_workflows_run_arguments(
+            self,
+            tool_name,
+            arguments,
+            user_text=user_text,
         )
-        for alias, canonical in alias_map:
-            canonical_value = repaired_overrides.get(canonical)
-            if isinstance(canonical_value, str) and canonical_value.strip():
-                continue
-            value = repaired_overrides.get(alias)
-            if not (isinstance(value, str) and value.strip()):
-                value = repaired.get(alias)
-            if isinstance(value, str) and value.strip():
-                repaired_overrides[canonical] = value.strip()
-
-        stitch_sources = self._extract_stitch_source_image_ids(user_text)
-        needs_image = not (isinstance(repaired_overrides.get("image"), str) and repaired_overrides["image"].strip())
-        needs_image_2 = (
-            self._stitch_workflow_requires_second_image(workflow_id)
-            and not (isinstance(repaired_overrides.get("image_2"), str) and repaired_overrides["image_2"].strip())
-        )
-
-        if needs_image and stitch_sources:
-            local_path = await self._download_variation_source_image(stitch_sources[0])
-            if isinstance(local_path, str) and local_path.strip():
-                repaired_overrides["image"] = local_path
-                needs_image = False
-
-        if needs_image_2 and len(stitch_sources) >= 2:
-            local_path = await self._download_variation_source_image(stitch_sources[1])
-            if isinstance(local_path, str) and local_path.strip():
-                repaired_overrides["image_2"] = local_path
-                needs_image_2 = False
-
-        # Remove alias keys from the top-level payload; workflows_run only expects control keys there.
-        for alias, canonical in alias_map:
-            repaired.pop(alias, None)
-            if canonical not in {"image", "image_2"}:
-                continue
-            repaired.pop(canonical, None)
-        repaired["overrides"] = repaired_overrides
-
-        # Prefer robust wait defaults for heavier image jobs.
-        if "wait_timeout_s" not in repaired:
-            repaired["wait_timeout_s"] = 300
-        if "wait_poll_ms" not in repaired:
-            repaired["wait_poll_ms"] = 1000
-        return repaired
 
     async def _repair_variation_workflows_run_arguments(
         self,
@@ -761,33 +1002,12 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> Dict[str, Any]:
-        """Best-effort repair for /vary flows missing an explicit source-image override."""
-        if tool_name != "workflows_run" or not isinstance(arguments, dict):
-            return arguments
-
-        workflow_id = str(arguments.get("workflow_id") or "").strip()
-        if not self._is_image_variation_workflow(workflow_id):
-            return arguments
-
-        existing_overrides = arguments.get("overrides")
-        if isinstance(existing_overrides, dict):
-            image_value = existing_overrides.get("image")
-            if isinstance(image_value, str) and image_value.strip():
-                return arguments
-
-        source_image_id = self._extract_variation_source_image_id(user_text)
-        if not source_image_id:
-            return arguments
-
-        local_source_path = await self._download_variation_source_image(source_image_id)
-        if not local_source_path:
-            return arguments
-
-        repaired = dict(arguments)
-        repaired_overrides = dict(existing_overrides) if isinstance(existing_overrides, dict) else {}
-        repaired_overrides["image"] = local_source_path
-        repaired["overrides"] = repaired_overrides
-        return repaired
+        return await self._workflow_tool_repairs.repair_variation_workflows_run_arguments(
+            self,
+            tool_name,
+            arguments,
+            user_text=user_text,
+        )
 
     async def _repair_tanktracks_workflows_run_arguments(
         self,
@@ -796,235 +1016,62 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> Dict[str, Any]:
-        """Best-effort repair for /tanktracks flows missing required workflows_run overrides."""
-        if tool_name != "workflows_run" or not isinstance(arguments, dict):
-            return arguments
-        if "TANK TRACKS FLOW REQUEST" not in str(user_text or "").upper():
-            return arguments
-
-        repaired = dict(arguments)
-        workflow_id = str(repaired.get("workflow_id") or "").strip()
-        if not workflow_id:
-            inferred_workflow = self._extract_flow_workflow_id(user_text)
-            if inferred_workflow:
-                workflow_id = inferred_workflow
-                repaired["workflow_id"] = inferred_workflow
-        if not workflow_id:
-            workflow_id = "add_tank_tracks"
-            repaired["workflow_id"] = workflow_id
-        if workflow_id != "add_tank_tracks":
-            return repaired
-
-        existing_overrides = repaired.get("overrides")
-        if not isinstance(existing_overrides, dict):
-            existing_overrides = {}
-        repaired_overrides = dict(existing_overrides)
-
-        image_value = repaired_overrides.get("image")
-        if not (isinstance(image_value, str) and image_value.strip()):
-            source_image_id = self._extract_flow_source_image_id(user_text)
-            if source_image_id:
-                local_source_path = await self._download_variation_source_image(source_image_id)
-                if local_source_path:
-                    repaired_overrides["image"] = local_source_path
-
-        prefix_value = repaired_overrides.get("filename_prefix")
-        if not (isinstance(prefix_value, str) and prefix_value.strip()):
-            repaired_overrides["filename_prefix"] = f"AddTankTracks_{uuid.uuid4().hex[:8]}"
-
-        repaired["overrides"] = repaired_overrides
-
-        # Prefer robust wait defaults for heavier image jobs.
-        if "wait_timeout_s" not in repaired:
-            repaired["wait_timeout_s"] = 300
-        if "wait_poll_ms" not in repaired:
-            repaired["wait_poll_ms"] = 1000
-
-        return repaired
+        return await self._workflow_tool_repairs.repair_tanktracks_workflows_run_arguments(
+            self,
+            tool_name,
+            arguments,
+            user_text=user_text,
+        )
 
     @staticmethod
     def _extract_flow_source_image_id(user_text: str) -> str | None:
-        if not isinstance(user_text, str):
-            return None
-        match = re.search(r"Source catalog image ID:\s*([A-Za-z0-9-]{8,})", user_text, re.I)
-        if not match:
-            return None
-        return match.group(1).strip()
+        return WorkflowToolRepairService.extract_flow_source_image_id(user_text)
 
     @staticmethod
     def _extract_flow_workflow_id(user_text: str) -> str | None:
-        if not isinstance(user_text, str):
-            return None
-        match = re.search(r"Workflow preference:\s*([A-Za-z0-9._-]+)", user_text, re.I)
-        if not match:
-            return None
-        return match.group(1).strip()
+        return WorkflowToolRepairService.extract_flow_workflow_id(user_text)
 
     async def _download_variation_source_image(self, source_image_id: str) -> str | None:
-        tool_name = self._select_variation_download_tool()
-        if not tool_name:
-            return None
-
-        schema = self._tool_input_schema_by_name.get(tool_name)
-        image_id_key = self._select_download_image_id_key(schema)
-        if not image_id_key:
-            return None
-
-        save_path_key = self._select_download_save_path_key(schema)
-        include_base64_key = self._select_download_include_base64_key(schema)
-
-        safe_stem = re.sub(r"[^A-Za-z0-9]+", "", source_image_id)[:24] or "VariationSource"
-        requested_path: Path | None = None
-        payload: Dict[str, Any] = {image_id_key: source_image_id}
-        if save_path_key:
-            requested_path = Path(tempfile.gettempdir()) / f"{safe_stem}_{uuid.uuid4().hex[:8]}.png"
-            payload[save_path_key] = str(requested_path)
-        if include_base64_key:
-            payload[include_base64_key] = False
-
-        try:
-            async with self._tool_execution_lock:
-                result = await self._router.call_tool(tool_name, payload)
-        except Exception:
-            return None
-
-        resolved = self._resolve_downloaded_file_path(result, requested_path=requested_path)
-        return resolved
+        return await self._workflow_tool_repairs.download_variation_source_image(self, source_image_id)
 
     def _select_variation_download_tool(self) -> str | None:
-        for candidate in ("photarium_download_image", "catalog_download_image", "photarium_download_original"):
-            if candidate in self._tool_input_schema_by_name:
-                return candidate
-        return None
+        return WorkflowToolRepairService.select_variation_download_tool(self)
 
     @staticmethod
     def _select_download_image_id_key(schema: Dict[str, Any] | None) -> str | None:
-        if not isinstance(schema, dict):
-            return "imageId"
-        props = schema.get("properties")
-        if not isinstance(props, dict):
-            return "imageId"
-        for key in ("imageId", "image_id", "id", "imageUUID", "image_uuid", "uuid"):
-            if key in props:
-                return key
-        return "imageId"
+        return WorkflowToolRepairService.select_download_image_id_key(schema)
 
     @staticmethod
     def _select_download_save_path_key(schema: Dict[str, Any] | None) -> str | None:
-        if not isinstance(schema, dict):
-            return "savePath"
-        props = schema.get("properties")
-        if not isinstance(props, dict):
-            return "savePath"
-        for key in ("savePath", "save_path", "filePath", "file_path", "path", "localPath", "local_path"):
-            if key in props:
-                return key
-        return None
+        return WorkflowToolRepairService.select_download_save_path_key(schema)
 
     @staticmethod
     def _select_download_include_base64_key(schema: Dict[str, Any] | None) -> str | None:
-        if not isinstance(schema, dict):
-            return None
-        props = schema.get("properties")
-        if not isinstance(props, dict):
-            return None
-        for key in ("includeBase64", "include_base64", "includeData", "include_data"):
-            if key in props:
-                return key
-        return None
+        return WorkflowToolRepairService.select_download_include_base64_key(schema)
 
     @staticmethod
     def _resolve_downloaded_file_path(download_result: Any, *, requested_path: Path | None) -> str | None:
-        if isinstance(download_result, dict):
-            for key in ("savedPath", "savePath", "filePath", "file_path", "localPath", "local_path", "path"):
-                value = download_result.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-            filename = download_result.get("filename")
-            if (
-                isinstance(filename, str)
-                and filename.strip()
-                and requested_path is not None
-                and requested_path.exists()
-                and requested_path.is_dir()
-            ):
-                return str(requested_path / filename.strip())
-        if requested_path is not None:
-            return str(requested_path)
-        return None
+        return WorkflowToolRepairService.resolve_downloaded_file_path(download_result, requested_path=requested_path)
 
     @staticmethod
     def _is_image_variation_workflow(workflow_id: str) -> bool:
-        return str(workflow_id or "").strip().lower() == "image_variation_maker"
+        return WorkflowToolRepairService.is_image_variation_workflow(workflow_id)
 
     @staticmethod
     def _is_stitching_workflow(workflow_id: str) -> bool:
-        normalized = str(workflow_id or "").strip().lower()
-        if not normalized:
-            return False
-        if normalized in {"flux_kontext_image_stitch", "flux_kontext_multi_image_stitching"}:
-            return True
-        return normalized.startswith("flux_kontext_") and "stitch" in normalized
+        return WorkflowToolRepairService.is_stitching_workflow(workflow_id)
 
     @staticmethod
     def _stitch_workflow_requires_second_image(workflow_id: str) -> bool:
-        normalized = str(workflow_id or "").strip().lower()
-        return normalized in {
-            "flux_kontext_multi_image_stitching",
-            "flux_kontext_multi_image_chaining",
-        }
+        return WorkflowToolRepairService.stitch_workflow_requires_second_image(workflow_id)
 
     @staticmethod
     def _extract_stitch_source_image_ids(user_text: str) -> list[str]:
-        if not isinstance(user_text, str):
-            return []
-
-        token = r"([A-Za-z0-9][A-Za-z0-9._:-]{1,127})"
-        patterns = (
-            rf"Source\s+catalog\s+image\s+IDs?\s*:\s*{token}\s*(?:,|and|\s)\s*{token}",
-            rf"Stitch\s+Flow\s*:\s*source(?:_id)?1?\s*=\s*{token}\s+source(?:_id)?2?\s*=\s*{token}",
-            rf"\b(?:/stitch|stitch)\s+{token}\s+(?:and\s+)?{token}\b",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, user_text, re.IGNORECASE)
-            if not match:
-                continue
-            first = match.group(1).strip()
-            second = match.group(2).strip()
-            if first and second:
-                return [first, second]
-
-        # Fallback: take first two UUID-like tokens in order.
-        ids: list[str] = []
-        for match in re.finditer(
-            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
-            user_text,
-        ):
-            value = match.group(0).strip()
-            if value in ids:
-                continue
-            ids.append(value)
-            if len(ids) >= 2:
-                break
-        return ids
+        return WorkflowToolRepairService.extract_stitch_source_image_ids(user_text)
 
     @staticmethod
     def _extract_variation_source_image_id(user_text: str) -> str | None:
-        if not isinstance(user_text, str):
-            return None
-        patterns = (
-            r"Source catalog image ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]{1,127})",
-            r"Variation Flow:\s*source=([A-Za-z0-9][A-Za-z0-9._:-]{1,127})",
-            r"\b(?:/vary|/variation|/variations)\s+(?:image\s+id\s+|image\s+)?([A-Za-z0-9][A-Za-z0-9._:-]{1,127})\b",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, user_text, re.IGNORECASE)
-            if not match:
-                continue
-            value = match.group(1).strip()
-            if value:
-                return value
-        return None
+        return WorkflowToolRepairService.extract_variation_source_image_id(user_text)
 
     @classmethod
     def _repair_workflows_import_from_artifact_arguments(
@@ -1034,131 +1081,30 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> Dict[str, Any]:
-        if tool_name != "workflows_import_from_artifact":
-            return arguments
-        if not isinstance(arguments, dict):
-            return arguments
-
-        repaired = dict(arguments)
-
-        # Flatten nested wrappers that some model/tool bridges emit.
-        wrapper_keys = ("arguments", "args", "input", "payload", "params", "token")
-        flattened_wrapper_keys: set[str] = set()
-        for wrapper_key in wrapper_keys:
-            wrapped = repaired.get(wrapper_key)
-            if not isinstance(wrapped, dict):
-                continue
-            flattened_wrapper_keys.add(wrapper_key)
-            for key, value in wrapped.items():
-                repaired.setdefault(key, value)
-        for wrapper_key in flattened_wrapper_keys:
-            repaired.pop(wrapper_key, None)
-
-        # Canonicalize common alias keys models may produce.
-        for alias in (
-            "image_path",
-            "artifact_path",
-            "artifactPath",
-            "file_path",
-            "filePath",
-            "source_path",
-            "sourcePath",
-            "local_path",
-            "localPath",
-        ):
-            if "path" not in repaired and isinstance(repaired.get(alias), str):
-                repaired["path"] = repaired[alias]
-        for alias in ("id", "workflow", "workflow_name", "workflowName"):
-            if "workflow_id" not in repaired and isinstance(repaired.get(alias), str):
-                repaired["workflow_id"] = repaired[alias]
-
-        inferred_path = cls._extract_local_artifact_path_from_text(user_text)
-        if "path" not in repaired and inferred_path:
-            repaired["path"] = inferred_path
-
-        inferred_name = cls._extract_requested_workflow_name_from_text(user_text)
-        if "workflow_id" not in repaired and inferred_name:
-            repaired["workflow_id"] = inferred_name
-        if "name" not in repaired and inferred_name:
-            repaired["name"] = inferred_name
-
-        return repaired
+        return WorkflowToolRepairService.repair_workflows_import_from_artifact_arguments(
+            tool_name,
+            arguments,
+            user_text=user_text,
+        )
 
     @staticmethod
     def _preflight_workflows_import_from_artifact_arguments(tool_name: str, arguments: Dict[str, Any]) -> None:
-        if tool_name != "workflows_import_from_artifact":
-            return
-        if not isinstance(arguments, dict):
-            raise RuntimeError("workflows_import_from_artifact preflight failed: arguments must be an object")
-        missing: list[str] = []
-        for required in ("path", "workflow_id"):
-            value = arguments.get(required)
-            if not isinstance(value, str) or not value.strip():
-                missing.append(required)
-        if missing:
-            missing_text = ", ".join(missing)
-            raise RuntimeError(
-                "workflows_import_from_artifact preflight blocked: missing required argument(s): "
-                f"{missing_text}. Provide an explicit local artifact path and workflow_id."
-            )
+        WorkflowToolRepairService.preflight_workflows_import_from_artifact_arguments(tool_name, arguments)
 
     @staticmethod
     def _extract_local_artifact_path_from_text(user_text: str) -> str | None:
-        if not isinstance(user_text, str):
-            return None
-        # Local absolute paths with common artifact extensions.
-        match = re.search(
-            r"(/[^\"'\s]+\.(?:png|jpe?g|webp|mp4|mov|json))",
-            user_text,
-            re.IGNORECASE,
-        )
-        if not match:
-            return None
-        return match.group(1).strip()
+        return WorkflowToolRepairService.extract_local_artifact_path_from_text(user_text)
 
     @staticmethod
     def _extract_requested_workflow_name_from_text(user_text: str) -> str | None:
-        if not isinstance(user_text, str):
-            return None
-        patterns = (
-            r'\bname\s+"([^"]{1,128})"',
-            r"\bname\s+'([^']{1,128})'",
-            r"\bworkflow(?:_id| id)?\s+([A-Za-z0-9._:-]{1,128})\b",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, user_text, re.IGNORECASE)
-            if not match:
-                continue
-            value = match.group(1).strip()
-            if value:
-                return value
-        return None
+        return WorkflowToolRepairService.extract_requested_workflow_name_from_text(user_text)
 
     @staticmethod
     def _extract_shorthand_edit_image_id(user_text: str) -> str | None:
-        if not isinstance(user_text, str):
-            return None
-        match = re.search(r"\bedit\s+image(?:\s+id)?\s+([A-Za-z0-9][A-Za-z0-9._:-]{1,127})\b", user_text, re.I)
-        if not match:
-            return None
-        return match.group(1).strip()
+        return WorkflowToolRepairService.extract_shorthand_edit_image_id(user_text)
 
     async def _verify_photarium_image_id_candidate(self, image_id: str) -> bool:
-        for tool_name, payload in (
-            ("photarium_get", {"imageId": image_id}),
-            ("catalog_get", {"imageId": image_id}),
-            ("catalog_get", {"image_id": image_id}),
-        ):
-            if tool_name not in self._tool_input_schema_by_name:
-                continue
-            try:
-                result = await self._router.call_tool(tool_name, payload)
-            except Exception:
-                continue
-            if isinstance(result, dict) and result.get("error"):
-                continue
-            return True
-        return False
+        return await self._workflow_tool_repairs.verify_photarium_image_id_candidate(self, image_id)
 
     async def _maybe_convert_upload_url_to_from_path(
         self,
@@ -1167,66 +1113,12 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> tuple[str, Dict[str, Any], Path] | None:
-        lowered = tool_name.lower()
-        if "upload" not in lowered:
-            return None
-        if "photarium" not in lowered and "catalog" not in lowered:
-            return None
-        if "upload_from_path" in lowered:
-            return None
-
-        url_value = self._extract_upload_url_value(arguments)
-        if not url_value:
-            return None
-
-        from_path_tool = self._paired_upload_from_path_tool(tool_name)
-        if not from_path_tool:
-            return None
-
-        path_key = self._select_upload_path_key(self._tool_input_schema_by_name.get(from_path_tool))
-        if not path_key:
-            return None
-
-        # Derive a clean label first from available semantic context.
-        name_schema = {"type": "object", "properties": {"name": {"type": "string"}}}
-        seed_args = normalize_photarium_upload_arguments(
+        return await self._binary_transfer_adapter.maybe_convert_upload_url_to_from_path(
+            self,
             tool_name,
             arguments,
-            name_schema,
-            fallback_text=user_text,
+            user_text=user_text,
         )
-        seed_label = str(seed_args.get("name") or "UploadedImage")
-
-        downloaded = await self._download_url_to_temp_file(url_value, seed_label)
-        if downloaded is None:
-            return None
-
-        # If vision naming is available, refine with image understanding.
-        vision_label = await self._vision_semantic_label_from_image(downloaded)
-        final_label = self._safe_filename_stem(vision_label or seed_label)
-
-        renamed = downloaded
-        target = downloaded.with_name(f"{final_label}{downloaded.suffix or '.png'}")
-        if target != downloaded:
-            if target.exists():
-                target = downloaded.with_name(f"{final_label}_{uuid.uuid4().hex[:6]}{downloaded.suffix or '.png'}")
-            downloaded.rename(target)
-            renamed = target
-
-        from_path_schema = self._tool_input_schema_by_name.get(from_path_tool)
-        new_args = dict(arguments)
-        for url_key in ("url", "imageUrl", "image_url", "view_url", "viewUrl"):
-            new_args.pop(url_key, None)
-        new_args[path_key] = str(renamed)
-        # Seed name so immutable/filename fields can be synced.
-        new_args["name"] = final_label
-        new_args = normalize_photarium_upload_arguments(
-            from_path_tool,
-            new_args,
-            from_path_schema,
-            fallback_text=user_text,
-        )
-        return from_path_tool, new_args, renamed
 
     def _apply_tanktracks_upload_conventions(
         self,
@@ -1235,138 +1127,41 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> Dict[str, Any]:
-        if "TANK TRACKS FLOW REQUEST" not in str(user_text):
-            return arguments
-        if not _is_photarium_like_upload_tool(tool_name):
-            return arguments
-
-        normalized = dict(arguments)
-        normalized = self._ensure_upload_tags(
-            normalized,
-            required_tags=["tank tracks", "caterpillar tracks", "tracks"],
+        return self._binary_transfer_adapter.apply_tanktracks_upload_conventions(
+            tool_name,
+            arguments,
+            user_text=user_text,
         )
-        self._drop_generic_tanktracks_display_name(normalized)
-        return normalized
 
     @staticmethod
     def _ensure_upload_tags(arguments: Dict[str, Any], required_tags: list[str]) -> Dict[str, Any]:
-        payload = dict(arguments)
-        for key in ("tags", "tag_names"):
-            if key not in payload:
-                continue
-            value = payload.get(key)
-            if isinstance(value, list):
-                existing = [str(v).strip() for v in value if str(v).strip()]
-                seen = {v.casefold() for v in existing}
-                for tag in required_tags:
-                    if tag.casefold() not in seen:
-                        existing.append(tag)
-                payload[key] = existing
-                return payload
-            if isinstance(value, str):
-                parts = [p.strip() for p in value.split(",") if p.strip()]
-                seen = {p.casefold() for p in parts}
-                for tag in required_tags:
-                    if tag.casefold() not in seen:
-                        parts.append(tag)
-                payload[key] = ", ".join(parts)
-                return payload
-        payload["tags"] = list(required_tags)
-        return payload
+        return BinaryTransferAdapter.ensure_upload_tags(arguments, required_tags)
 
     @staticmethod
     def _drop_generic_tanktracks_display_name(arguments: Dict[str, Any]) -> None:
-        generic_labels = {
-            "addtanktracks",
-            "tanktracks",
-            "tanktracksflowrequest",
-            "tanktracksflow",
-        }
-        for key in ("name", "title"):
-            raw = arguments.get(key)
-            if not isinstance(raw, str):
-                continue
-            compact = re.sub(r"[^a-z0-9]+", "", raw.lower())
-            if compact in generic_labels:
-                arguments.pop(key, None)
+        BinaryTransferAdapter.drop_generic_tanktracks_display_name(arguments)
 
     def _paired_upload_from_path_tool(self, upload_url_tool: str) -> str | None:
-        candidates: list[str] = []
-        if "upload_url" in upload_url_tool:
-            candidates.append(upload_url_tool.replace("upload_url", "upload_from_path"))
-        if "upload_image" in upload_url_tool:
-            candidates.append(upload_url_tool.replace("upload_image", "upload_from_path"))
-        if upload_url_tool.startswith("photarium_"):
-            candidates.append("photarium_upload_from_path")
-            candidates.append("photarium_upload_image")
-        if upload_url_tool.startswith("catalog_"):
-            candidates.append("catalog_upload_from_path")
-            candidates.append("catalog_upload_image")
-        for candidate in candidates:
-            if candidate in self._tool_input_schema_by_name:
-                return candidate
-        return None
+        return BinaryTransferAdapter.paired_upload_from_path_tool(self, upload_url_tool)
 
     @staticmethod
     def _extract_upload_url_value(arguments: Dict[str, Any]) -> str | None:
-        for key in ("url", "imageUrl", "image_url", "view_url", "viewUrl"):
-            value = arguments.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
+        return BinaryTransferAdapter.extract_upload_url_value(arguments)
 
     @staticmethod
     def _select_upload_path_key(schema: Dict[str, Any] | None) -> str | None:
-        if not isinstance(schema, dict):
-            return None
-        props = schema.get("properties")
-        if not isinstance(props, dict):
-            return None
-        for key in ("filePath", "file_path", "path", "localPath", "local_path", "imagePath", "image_path"):
-            if key in props:
-                return key
-        return None
+        return BinaryTransferAdapter.select_upload_path_key(schema)
 
     async def _download_url_to_temp_file(self, url: str, label: str) -> Path | None:
-        ext = self._guess_extension_from_url(url) or ".png"
-        stem = self._safe_filename_stem(label)
-        target = Path(tempfile.gettempdir()) / f"{stem}_{uuid.uuid4().hex[:8]}{ext}"
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                target.write_bytes(response.content)
-            return target
-        except Exception:
-            try:
-                target.unlink(missing_ok=True)
-            except Exception:
-                pass
-            return None
+        return await self._binary_transfer_adapter.download_url_to_temp_file(url, label)
 
     @staticmethod
     def _guess_extension_from_url(url: str) -> str | None:
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            return None
-        query = parse_qs(parsed.query or "")
-        for key in ("view_filename", "filename", "file", "name", "image"):
-            values = query.get(key)
-            if not values:
-                continue
-            raw = unquote(str(values[0])).strip()
-            if not raw:
-                continue
-            ext = Path(raw).suffix.lower()
-            if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".avif"}:
-                return ext
-        return None
+        return BinaryTransferAdapter.guess_extension_from_url(url)
 
     @staticmethod
     def _safe_filename_stem(value: str) -> str:
-        cleaned = re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).strip()
-        return cleaned[:64] or "UploadedImage"
+        return BinaryTransferAdapter.safe_filename_stem(value)
 
     def _normalize_photarium_upload_namespace(
         self,
@@ -1374,100 +1169,51 @@ class ChatOrchestrator:
         arguments: Dict[str, Any],
         input_schema: Dict[str, Any] | None,
     ) -> Dict[str, Any]:
-        lowered = tool_name.lower()
-        if "upload" not in lowered:
-            return arguments
-        if "photarium" not in lowered and "catalog" not in lowered:
-            return arguments
-        if not self._schema_supports_namespace(input_schema) and "namespace" not in arguments:
-            return arguments
-
-        normalized = dict(arguments)
-        explicit = str(normalized.get("namespace") or "").strip()
-        if explicit:
-            return normalized
-
-        inferred = self._infer_namespace_from_upload_arguments(normalized)
-        normalized["namespace"] = inferred or "cf-default"
-        return normalized
+        return self._binary_transfer_adapter.normalize_photarium_upload_namespace(
+            self,
+            tool_name,
+            arguments,
+            input_schema,
+        )
 
     @staticmethod
     def _schema_supports_namespace(input_schema: Dict[str, Any] | None) -> bool:
-        if not isinstance(input_schema, dict):
-            return False
-        properties = input_schema.get("properties")
-        return isinstance(properties, dict) and "namespace" in properties
+        return BinaryTransferAdapter.schema_supports_namespace(input_schema)
 
     def _infer_namespace_from_upload_arguments(self, arguments: Dict[str, Any]) -> str | None:
-        for candidate_id in self._candidate_image_ids(arguments):
-            namespace = self._image_namespace_by_id.get(candidate_id)
-            if namespace:
-                return namespace
-        return None
+        return BinaryTransferAdapter.infer_namespace_from_upload_arguments(self, arguments)
 
     def _record_image_namespaces_from_result(self, payload: Any) -> None:
-        stack: list[Any] = [payload]
-        while stack:
-            current = stack.pop()
-            if isinstance(current, list):
-                stack.extend(current)
-                continue
-            if not isinstance(current, dict):
-                continue
+        self._image_namespaces.record_from_result(payload)
 
-            image_id = self._extract_image_id(current)
-            namespace = str(current.get("namespace") or "").strip()
-            if image_id and namespace:
-                self._image_namespace_by_id[image_id] = namespace
+    def _record_source_image_local_path(self, local_path: str, source_image_id: str) -> None:
+        path_text = str(local_path or "").strip()
+        source_id = str(source_image_id or "").strip()
+        if not path_text or not source_id:
+            return
+        try:
+            resolved = str(Path(path_text).expanduser().resolve())
+        except Exception:
+            resolved = path_text
+        self._source_image_id_by_local_path[resolved] = source_id
+        self._source_image_id_by_local_path[path_text] = source_id
 
-            stack.extend(current.values())
+    def _source_image_id_for_local_path(self, local_path: str) -> str | None:
+        path_text = str(local_path or "").strip()
+        if not path_text:
+            return None
+        try:
+            resolved = str(Path(path_text).expanduser().resolve())
+        except Exception:
+            resolved = path_text
+        return self._source_image_id_by_local_path.get(resolved) or self._source_image_id_by_local_path.get(path_text)
 
     def _candidate_image_ids(self, payload: Dict[str, Any]) -> list[str]:
-        seen: set[str] = set()
-        candidates: list[str] = []
-        for key in (
-            "imageId",
-            "image_id",
-            "parentId",
-            "parent_id",
-            "variantOf",
-            "variant_of",
-            "sourceImageId",
-            "source_image_id",
-            "inputImageId",
-            "input_image_id",
-        ):
-            value = payload.get(key)
-            if not isinstance(value, str):
-                continue
-            candidate = value.strip()
-            if not candidate or candidate in seen:
-                continue
-            seen.add(candidate)
-            candidates.append(candidate)
-        return candidates
+        return ImageNamespaceRegistry.candidate_image_ids(payload)
 
     @staticmethod
     def _extract_image_id(payload: Dict[str, Any]) -> str | None:
-        for key in (
-            "image_id",
-            "imageId",
-            "catalog_image_id",
-            "catalogImageId",
-            "photarium_image_id",
-            "photariumImageId",
-            "image_uuid",
-            "imageUuid",
-            "uuid",
-            "id",
-        ):
-            value = payload.get(key)
-            if value is None:
-                continue
-            text = str(value).strip()
-            if text:
-                return text
-        return None
+        return ImageNamespaceRegistry.extract_image_id(payload)
 
     async def _maybe_auto_upload_workflow_outputs(
         self,
@@ -1477,148 +1223,23 @@ class ChatOrchestrator:
         *,
         user_text: str,
     ) -> Dict[str, Any] | None:
-        if tool_name not in {"workflows_run", "workflows_run_aspect_ratio_adjustment"}:
-            return None
-        if "TANK TRACKS FLOW REQUEST" in str(user_text or "").upper():
-            return {"status": "skipped", "reason": "tanktracks_flow_handles_upload"}
-        if not isinstance(tool_result, dict):
-            return {"status": "skipped", "reason": "non_object_result"}
-
-        output_images = tool_result.get("output_images")
-        if not isinstance(output_images, list) or not output_images:
-            return {"status": "skipped", "reason": "no_output_images"}
-
-        upload_tool = self._select_auto_upload_tool_name()
-        if not upload_tool:
-            return {"status": "failed", "reason": "photarium_upload_tool_unavailable"}
-
-        upload_schema = self._tool_input_schema_by_name.get(upload_tool)
-        upload_path_key = self._select_upload_local_path_key(upload_schema)
-        if not upload_path_key:
-            return {"status": "failed", "reason": "upload_tool_missing_path_parameter", "tool": upload_tool}
-
-        items: list[Dict[str, Any]] = []
-        uploaded_count = 0
-        for image_payload in output_images:
-            if not isinstance(image_payload, dict):
-                continue
-            filename = str(image_payload.get("filename") or "").strip()
-            local_path, path_source = await self._resolve_output_image_local_path(image_payload)
-            if not local_path:
-                items.append(
-                    {
-                        "filename": filename or None,
-                        "status": "failed",
-                        "error": "could_not_resolve_local_output_path",
-                    }
-                )
-                continue
-            upload_args = self._build_auto_upload_arguments(
-                upload_tool_name=upload_tool,
-                upload_schema=upload_schema,
-                upload_path_key=upload_path_key,
-                local_path=local_path,
-                image_payload=image_payload,
-                tool_arguments=tool_arguments,
-                user_text=user_text,
-            )
-            try:
-                async with self._tool_execution_lock:
-                    upload_result = await self._router.call_tool(upload_tool, upload_args)
-                uploaded_count += 1
-                self._record_image_namespaces_from_result(upload_result)
-                items.append(
-                    {
-                        "filename": filename or Path(local_path).name,
-                        "status": "uploaded",
-                        "tool": upload_tool,
-                        "path_source": path_source,
-                        "upload_result": upload_result,
-                    }
-                )
-            except Exception as exc:
-                items.append(
-                    {
-                        "filename": filename or Path(local_path).name,
-                        "status": "failed",
-                        "tool": upload_tool,
-                        "path_source": path_source,
-                        "error": str(exc),
-                    }
-                )
-
-        if uploaded_count == len(items) and items:
-            status = "uploaded"
-        elif uploaded_count > 0:
-            status = "partial"
-        else:
-            status = "failed"
-        return {
-            "status": status,
-            "mode": "automatic",
-            "tool": upload_tool,
-            "items": items,
-        }
+        return await self._binary_transfer_adapter.maybe_auto_upload_workflow_outputs(
+            self,
+            tool_name,
+            tool_arguments,
+            tool_result,
+            user_text=user_text,
+        )
 
     def _select_auto_upload_tool_name(self) -> str | None:
-        for candidate in (
-            "photarium_upload_from_path",
-            "catalog_upload_from_path",
-            "photarium_upload_image",
-            "catalog_upload_image",
-        ):
-            if candidate in self._tool_input_schema_by_name:
-                return candidate
-        return None
+        return BinaryTransferAdapter.select_auto_upload_tool_name(self)
 
     @staticmethod
     def _select_upload_local_path_key(schema: Dict[str, Any] | None) -> str | None:
-        if not isinstance(schema, dict):
-            return None
-        properties = schema.get("properties")
-        if not isinstance(properties, dict):
-            return None
-        for key in ("filePath", "file_path", "path", "localPath", "local_path", "imagePath", "image_path"):
-            if key in properties:
-                return key
-        return None
+        return BinaryTransferAdapter.select_upload_local_path_key(schema)
 
     async def _resolve_output_image_local_path(self, image_payload: Dict[str, Any]) -> tuple[str | None, str | None]:
-        local_path = str(image_payload.get("local_path") or "").strip()
-        if local_path:
-            return local_path, "local_path"
-
-        if "comfy_download_image" not in self._tool_input_schema_by_name:
-            return None, None
-
-        filename = str(image_payload.get("filename") or "").strip()
-        if not filename:
-            return None, None
-
-        schema = self._tool_input_schema_by_name.get("comfy_download_image")
-        payload: Dict[str, Any] = {"filename": filename}
-        if self._schema_has_property(schema, "image_type"):
-            image_type = str(image_payload.get("type") or image_payload.get("image_type") or "output")
-            payload["image_type"] = image_type
-        if self._schema_has_property(schema, "subfolder"):
-            subfolder = str(image_payload.get("subfolder") or "").strip()
-            if subfolder:
-                payload["subfolder"] = subfolder
-        if self._schema_has_property(schema, "save_path"):
-            payload["save_path"] = str(Path(tempfile.gettempdir()) / f"{uuid.uuid4().hex[:8]}_{filename}")
-
-        try:
-            async with self._tool_execution_lock:
-                downloaded = await self._router.call_tool("comfy_download_image", payload)
-        except Exception:
-            return None, None
-
-        if isinstance(downloaded, dict):
-            for key in ("local_path", "savedPath", "savePath", "filePath", "path"):
-                value = downloaded.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip(), "comfy_download_image"
-        return None, None
+        return await self._binary_transfer_adapter.resolve_output_image_local_path(self, image_payload)
 
     @staticmethod
     def _schema_has_property(schema: Dict[str, Any] | None, key: str) -> bool:
@@ -1627,7 +1248,7 @@ class ChatOrchestrator:
         properties = schema.get("properties")
         return isinstance(properties, dict) and key in properties
 
-    def _build_auto_upload_arguments(
+    async def _build_auto_upload_arguments(
         self,
         *,
         upload_tool_name: str,
@@ -1638,94 +1259,19 @@ class ChatOrchestrator:
         tool_arguments: Dict[str, Any],
         user_text: str,
     ) -> Dict[str, Any]:
-        args: Dict[str, Any] = {upload_path_key: local_path}
-        filename = str(image_payload.get("filename") or "").strip()
-        stem = self._safe_filename_stem(Path(filename).stem if filename else Path(local_path).stem)
-        if self._schema_has_property(upload_schema, "name"):
-            args["name"] = stem
-        if self._schema_has_property(upload_schema, "title"):
-            args["title"] = stem
-        if self._schema_has_property(upload_schema, "namespace"):
-            args["namespace"] = "cf-default"
-
-        overrides = tool_arguments.get("overrides") if isinstance(tool_arguments, dict) else None
-        if isinstance(overrides, dict):
-            prompt_value = overrides.get("positive_prompt") or overrides.get("prompt")
-            if isinstance(prompt_value, str) and prompt_value.strip():
-                if self._schema_has_property(upload_schema, "prompt"):
-                    args["prompt"] = prompt_value.strip()
-                if self._schema_has_property(upload_schema, "positive_prompt"):
-                    args["positive_prompt"] = prompt_value.strip()
-        return normalize_photarium_upload_arguments(
-            upload_tool_name,
-            args,
-            upload_schema,
-            fallback_text=user_text,
+        return await self._binary_transfer_adapter.build_auto_upload_arguments(
+            self,
+            upload_tool_name=upload_tool_name,
+            upload_schema=upload_schema,
+            upload_path_key=upload_path_key,
+            local_path=local_path,
+            image_payload=image_payload,
+            tool_arguments=tool_arguments,
+            user_text=user_text,
         )
-
-
-def _is_photarium_like_upload_tool(tool_name: str) -> bool:
-    lowered = str(tool_name or "").lower()
-    return "upload" in lowered and ("photarium" in lowered or "catalog" in lowered)
 
     async def _vision_semantic_label_from_image(self, image_path: Path) -> str | None:
-        if os.environ.get("PYTEST_CURRENT_TEST"):
-            return None
-        if os.environ.get("COMFY_MCP_DISABLE_VISION_NAMING", "").strip().lower() in {"1", "true", "yes"}:
-            return None
-        if not image_path.exists() or not image_path.is_file():
-            return None
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            return None
-        return await asyncio.to_thread(self._vision_semantic_label_from_image_sync, image_path, api_key)
+        return await self._binary_transfer_adapter.vision_semantic_label_from_image(image_path)
 
     def _vision_semantic_label_from_image_sync(self, image_path: Path, api_key: str) -> str | None:
-        mime = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".gif": "image/gif",
-            ".bmp": "image/bmp",
-            ".tiff": "image/tiff",
-            ".avif": "image/avif",
-        }.get(image_path.suffix.lower())
-        if not mime:
-            return None
-        try:
-            from openai import OpenAI  # type: ignore
-        except Exception:
-            return None
-        image_bytes = image_path.read_bytes()
-        data_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('ascii')}"
-        prompt = (
-            "Return a semantic filename label for this image as 2-6 CamelCase words. "
-            "Return only the CamelCase label, no spaces or punctuation."
-        )
-        client = OpenAI(api_key=api_key, timeout=12.0)
-        for model in ("gpt-4o", "gpt-4o-mini"):
-            try:
-                response = client.chat.completions.create(
-                    model=model,
-                    temperature=0.1,
-                    max_tokens=32,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "image_url", "image_url": {"url": data_url}},
-                            ],
-                        }
-                    ],
-                )
-                content = ""
-                if response.choices:
-                    content = str(getattr(response.choices[0].message, "content", "") or "").strip()
-                label = self._safe_filename_stem(content)
-                if label and label != "UploadedImage":
-                    return label
-            except Exception:
-                continue
-        return None
+        return self._binary_transfer_adapter.vision_semantic_label_from_image_sync(image_path, api_key)

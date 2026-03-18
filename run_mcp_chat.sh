@@ -33,7 +33,17 @@ BACKOFFICE_ROOT="${BACKOFFICE_ROOT:-$(cd "$ROOT_DIR/../nfl-backoffice" 2>/dev/nu
 BACKOFFICE_MCP_PORT="${BACKOFFICE_HTTP_PORT:-8766}"
 DIGESTER_ROOT="${DIGESTER_ROOT:-$(cd "$ROOT_DIR/../Digester" 2>/dev/null && pwd || true)}"
 DIGESTER_MCP_PORT="${DIGESTER_HTTP_PORT:-8767}"
+WORKSPACE_MCP_PORT="${WORKSPACE_HTTP_PORT:-8777}"
 MCP_CHAT_TUI_PAUSE_SECONDS="${MCP_CHAT_TUI_PAUSE_SECONDS:-0}"
+
+if [[ ! -x "$VENV_PY" ]]; then
+  echo "Missing venv at $ROOT_DIR/.venv. Create it and install deps first." >&2
+  exit 1
+fi
+
+export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+export COMFY_MCP_WORKFLOW_LIBRARY_ROOT="${COMFY_MCP_WORKFLOW_LIBRARY_ROOT:-$ROOT_DIR/workflows}"
+export COMFY_MCP_INCLUDE_EXTRA_WORKFLOW_ROOTS="${COMFY_MCP_INCLUDE_EXTRA_WORKFLOW_ROOTS:-0}"
 
 if [[ -z "${COMFY_MCP_COMFY_BASE_URL:-}" && -f "$ROOT_DIR/.env" ]]; then
   comfy_base_from_env_file="$(grep -E '^COMFY_MCP_COMFY_BASE_URL=' "$ROOT_DIR/.env" | tail -n1 | sed 's/^COMFY_MCP_COMFY_BASE_URL=//')"
@@ -41,6 +51,97 @@ if [[ -z "${COMFY_MCP_COMFY_BASE_URL:-}" && -f "$ROOT_DIR/.env" ]]; then
     export COMFY_MCP_COMFY_BASE_URL="$comfy_base_from_env_file"
   fi
 fi
+
+CONFIGURED_SERVERS=()
+HTTP_TRANSPORT_SERVERS=()
+STDIO_TRANSPORT_SERVERS=()
+
+load_transport_plan() {
+  CONFIGURED_SERVERS=()
+  HTTP_TRANSPORT_SERVERS=()
+  STDIO_TRANSPORT_SERVERS=()
+
+  local line
+  local status=0
+  while IFS= read -r line; do
+    case "$line" in
+      __SERVER__:*)
+        CONFIGURED_SERVERS+=("${line#__SERVER__:}")
+        ;;
+      __HTTP__:*)
+        HTTP_TRANSPORT_SERVERS+=("${line#__HTTP__:}")
+        ;;
+      __STDIO__:*)
+        STDIO_TRANSPORT_SERVERS+=("${line#__STDIO__:}")
+        ;;
+    esac
+  done < <("$VENV_PY" - <<'PY' "$CFG"
+import sys
+
+from comfy_mcp.tui_client.config import load_config
+from comfy_mcp.tui_client.transport_plan import build_transport_plan
+
+config_path = sys.argv[1] if len(sys.argv) > 1 else "mcp_chat_config.json"
+cfg = load_config(config_path)
+plan = build_transport_plan(cfg.servers)
+
+for server in cfg.servers:
+    print(f"__SERVER__:{server.name}")
+for server in plan.http_servers:
+    print(f"__HTTP__:{server.name}")
+for server in plan.stdio_servers:
+    print(f"__STDIO__:{server.name}")
+PY
+)
+  status=$?
+  if [[ "$status" -ne 0 ]]; then
+    echo "Failed to load transport plan from $CFG." >&2
+    return "$status"
+  fi
+}
+
+server_is_configured() {
+  local name="$1"
+  local item
+  for item in "${CONFIGURED_SERVERS[@]-}"; do
+    if [[ "$item" == "$name" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+server_uses_http() {
+  local name="$1"
+  local item
+  for item in "${HTTP_TRANSPORT_SERVERS[@]-}"; do
+    if [[ "$item" == "$name" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+server_uses_stdio() {
+  local name="$1"
+  local item
+  for item in "${STDIO_TRANSPORT_SERVERS[@]-}"; do
+    if [[ "$item" == "$name" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+note_transport_skip() {
+  local display_name="$1"
+  local server_name="$2"
+  if server_uses_stdio "$server_name"; then
+    echo "$display_name: configured for stdio; EDGAR will spawn it on connect."
+  elif ! server_is_configured "$server_name"; then
+    echo "$display_name: not configured in $CFG; skipping."
+  fi
+}
 
 is_listening() {
   local port="$1"
@@ -80,13 +181,22 @@ PY
 wait_for_port() {
   local port="$1"
   local name="$2"
-  for _ in {1..25}; do
+  local attempts="${3:-25}"
+  local log_path="${4:-}"
+  local count=0
+  while [[ "$count" -lt "$attempts" ]]; do
     if is_listening "$port"; then
       return 0
     fi
     sleep 0.2
+    count=$((count + 1))
   done
   echo "$name failed to start on port $port" >&2
+  if [[ -n "$log_path" && -f "$log_path" ]]; then
+    echo "--- tail of $log_path ---" >&2
+    tail -n 40 "$log_path" >&2 || true
+    echo "--- end tail ---" >&2
+  fi
   return 1
 }
 
@@ -312,34 +422,139 @@ start_digester_mcp_http() {
   fi
 
   echo "Starting Digester MCP HTTP on :$DIGESTER_MCP_PORT..."
+  local digester_log="$DIGESTER_ROOT/.digester_mcp_http.log"
   nohup env DIGESTER_HTTP_PORT="$DIGESTER_MCP_PORT" \
-    "$helper" >"$DIGESTER_ROOT/.digester_mcp_http.log" 2>&1 &
-  wait_for_port "$DIGESTER_MCP_PORT" "Digester MCP HTTP"
+    "$helper" >"$digester_log" 2>&1 &
+  wait_for_port "$DIGESTER_MCP_PORT" "Digester MCP HTTP" 75 "$digester_log"
+}
+
+start_workspace_mcp_http() {
+  local force="${1:-0}"
+  local helper="$ROOT_DIR/run_workspace_mcp_http_server.sh"
+  if [[ ! -x "$helper" ]]; then
+    echo "Workspace helper not executable: $helper" >&2
+    echo "Run: chmod +x $helper" >&2
+    return 1
+  fi
+
+  if is_listening "$WORKSPACE_MCP_PORT"; then
+    if [[ "$force" == "1" ]]; then
+      stop_port_listeners "$WORKSPACE_MCP_PORT" "Workspace MCP HTTP"
+    else
+      echo "Workspace MCP HTTP already running on :$WORKSPACE_MCP_PORT"
+      return 0
+    fi
+  fi
+
+  if is_listening "$WORKSPACE_MCP_PORT"; then
+    echo "Workspace MCP HTTP still occupies :$WORKSPACE_MCP_PORT after stop attempt" >&2
+    return 1
+  fi
+
+  echo "Starting Workspace MCP HTTP on :$WORKSPACE_MCP_PORT..."
+  nohup env WORKSPACE_MCP_HTTP_BIND_PORT="$WORKSPACE_MCP_PORT" \
+    "$helper" >"$ROOT_DIR/.workspace_mcp_http.log" 2>&1 &
+  wait_for_port "$WORKSPACE_MCP_PORT" "Workspace MCP HTTP"
 }
 
 start_all_servers() {
   local force="${1:-0}"
-  start_comfy_mcp_http "$force"
-  start_photarium_mcp_http "$force"
-  start_editorial_mcp_http "$force"
-  start_backoffice_mcp_http "$force"
-  start_digester_mcp_http "$force"
+  if server_uses_http "comfy"; then
+    start_comfy_mcp_http "$force"
+  else
+    note_transport_skip "Comfy MCP" "comfy"
+  fi
+  if server_uses_http "photarium"; then
+    start_photarium_mcp_http "$force"
+  else
+    note_transport_skip "Photarium MCP" "photarium"
+  fi
+  if server_uses_http "editorial"; then
+    start_editorial_mcp_http "$force"
+  else
+    note_transport_skip "Editorial MCP" "editorial"
+  fi
+  if server_uses_http "backoffice"; then
+    start_backoffice_mcp_http "$force"
+  else
+    note_transport_skip "Backoffice MCP" "backoffice"
+  fi
+  if server_uses_http "digester"; then
+    start_digester_mcp_http "$force"
+  else
+    note_transport_skip "Digester MCP" "digester"
+  fi
+  if server_uses_http "workspace"; then
+    start_workspace_mcp_http "$force"
+  else
+    note_transport_skip "Workspace MCP" "workspace"
+  fi
 }
 
 stop_all_servers() {
-  stop_port_listeners "$DIGESTER_MCP_PORT" "Digester MCP HTTP"
-  stop_port_listeners "$EDITORIAL_MCP_PORT" "Editorial MCP HTTP"
-  stop_port_listeners "$BACKOFFICE_MCP_PORT" "Backoffice MCP HTTP"
-  stop_port_listeners "$PHOTARIUM_MCP_PORT" "Photarium MCP HTTP"
-  stop_port_listeners "$COMFY_MCP_PORT" "Comfy MCP HTTP"
+  if server_uses_http "workspace"; then
+    stop_port_listeners "$WORKSPACE_MCP_PORT" "Workspace MCP HTTP"
+  else
+    note_transport_skip "Workspace MCP" "workspace"
+  fi
+  if server_uses_http "digester"; then
+    stop_port_listeners "$DIGESTER_MCP_PORT" "Digester MCP HTTP"
+  else
+    note_transport_skip "Digester MCP" "digester"
+  fi
+  if server_uses_http "editorial"; then
+    stop_port_listeners "$EDITORIAL_MCP_PORT" "Editorial MCP HTTP"
+  else
+    note_transport_skip "Editorial MCP" "editorial"
+  fi
+  if server_uses_http "backoffice"; then
+    stop_port_listeners "$BACKOFFICE_MCP_PORT" "Backoffice MCP HTTP"
+  else
+    note_transport_skip "Backoffice MCP" "backoffice"
+  fi
+  if server_uses_http "photarium"; then
+    stop_port_listeners "$PHOTARIUM_MCP_PORT" "Photarium MCP HTTP"
+  else
+    note_transport_skip "Photarium MCP" "photarium"
+  fi
+  if server_uses_http "comfy"; then
+    stop_port_listeners "$COMFY_MCP_PORT" "Comfy MCP HTTP"
+  else
+    note_transport_skip "Comfy MCP" "comfy"
+  fi
 }
 
 status_all_servers() {
-  show_server_status "Comfy MCP HTTP" "$COMFY_MCP_PORT"
-  show_server_status "Photarium MCP HTTP" "$PHOTARIUM_MCP_PORT"
-  show_server_status "Editorial MCP HTTP" "$EDITORIAL_MCP_PORT"
-  show_server_status "Backoffice MCP HTTP" "$BACKOFFICE_MCP_PORT"
-  show_server_status "Digester MCP HTTP" "$DIGESTER_MCP_PORT"
+  if server_uses_http "comfy"; then
+    show_server_status "Comfy MCP HTTP" "$COMFY_MCP_PORT"
+  else
+    note_transport_skip "Comfy MCP" "comfy"
+  fi
+  if server_uses_http "photarium"; then
+    show_server_status "Photarium MCP HTTP" "$PHOTARIUM_MCP_PORT"
+  else
+    note_transport_skip "Photarium MCP" "photarium"
+  fi
+  if server_uses_http "editorial"; then
+    show_server_status "Editorial MCP HTTP" "$EDITORIAL_MCP_PORT"
+  else
+    note_transport_skip "Editorial MCP" "editorial"
+  fi
+  if server_uses_http "backoffice"; then
+    show_server_status "Backoffice MCP HTTP" "$BACKOFFICE_MCP_PORT"
+  else
+    note_transport_skip "Backoffice MCP" "backoffice"
+  fi
+  if server_uses_http "digester"; then
+    show_server_status "Digester MCP HTTP" "$DIGESTER_MCP_PORT"
+  else
+    note_transport_skip "Digester MCP" "digester"
+  fi
+  if server_uses_http "workspace"; then
+    show_server_status "Workspace MCP HTTP" "$WORKSPACE_MCP_PORT"
+  else
+    note_transport_skip "Workspace MCP" "workspace"
+  fi
 }
 
 maybe_pause_before_tui() {
@@ -350,6 +565,10 @@ maybe_pause_before_tui() {
   echo "Waiting ${seconds}s before launching TUI..."
   sleep "$seconds"
 }
+
+if ! load_transport_plan; then
+  exit 1
+fi
 
 case "$ACTION" in
   restart)
@@ -376,11 +595,6 @@ esac
 
 maybe_pause_before_tui "$MCP_CHAT_TUI_PAUSE_SECONDS"
 
-if [[ ! -x "$VENV_PY" ]]; then
-  echo "Missing venv at $ROOT_DIR/.venv. Create it and install deps first." >&2
-  exit 1
-fi
-
 # Sanity check MCP client availability only when launching the TUI.
 if ! "$VENV_PY" - <<'PY' >/dev/null 2>&1; then
 from mcp.client.session import ClientSession
@@ -390,10 +604,6 @@ PY
   exit 1
 fi
 
-# Always run local source to avoid stale editable-install issues.
-export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
-export COMFY_MCP_WORKFLOW_LIBRARY_ROOT="${COMFY_MCP_WORKFLOW_LIBRARY_ROOT:-$ROOT_DIR/workflows}"
-export COMFY_MCP_INCLUDE_EXTRA_WORKFLOW_ROOTS="${COMFY_MCP_INCLUDE_EXTRA_WORKFLOW_ROOTS:-0}"
 export TEXTUAL_ALLOW_SIGNALS="${TEXTUAL_ALLOW_SIGNALS:-1}"
 if [[ "${TERM_PROGRAM:-}" == "WezTerm" && -z "${EDGAR_TUI_DISABLE_KITTY_KEYBOARD:-}" ]]; then
   export EDGAR_TUI_DISABLE_KITTY_KEYBOARD=1
@@ -401,14 +611,31 @@ fi
 
 # Doctor behavior: warn (default), strict, or off
 MCP_CHAT_DOCTOR_MODE="${MCP_CHAT_DOCTOR_MODE:-warn}"
+MCP_CHAT_DOCTOR_TIMEOUT_SECONDS="${MCP_CHAT_DOCTOR_TIMEOUT_SECONDS:-30}"
 if [[ "$MCP_CHAT_DOCTOR_MODE" != "off" ]]; then
-  if ! "$VENV_PY" - <<'PY' "$CFG"; then
+  echo "Running MCP doctor (mode=$MCP_CHAT_DOCTOR_MODE, timeout=${MCP_CHAT_DOCTOR_TIMEOUT_SECONDS}s)..."
+  if ! "$VENV_PY" - <<'PY' "$CFG" "$MCP_CHAT_DOCTOR_TIMEOUT_SECONDS"; then
 import asyncio
 import sys
 from comfy_mcp.tui_client.script_runner import _doctor
 
 config_path = sys.argv[1] if len(sys.argv) > 1 else "mcp_chat_config.json"
-raise SystemExit(asyncio.run(_doctor(config_path)))
+timeout_raw = sys.argv[2] if len(sys.argv) > 2 else "30"
+try:
+    timeout_s = float(timeout_raw)
+except ValueError:
+    timeout_s = 30.0
+
+async def _run_doctor() -> int:
+    if timeout_s <= 0:
+        return await _doctor(config_path)
+    try:
+        return await asyncio.wait_for(_doctor(config_path), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        print(f"[WARN] MCP doctor timed out after {timeout_s:.1f}s; continuing startup.")
+        return 124
+
+raise SystemExit(asyncio.run(_run_doctor()))
 PY
     if [[ "$MCP_CHAT_DOCTOR_MODE" == "strict" ]]; then
       echo "MCP doctor failed (strict mode)." >&2

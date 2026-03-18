@@ -171,7 +171,6 @@ def main() -> int:
     photo_meta = _post_tool(args.photarium_mcp_url, "photarium_get", {"imageId": image_id})
 
     folder = photo_meta.get("folder")
-    tags = photo_meta.get("tags")
     namespace = photo_meta.get("namespace")
     description = photo_meta.get("description")
 
@@ -238,8 +237,6 @@ def main() -> int:
         }
         if folder:
             upload_args["folder"] = folder
-        if isinstance(tags, list) and tags:
-            upload_args["tags"] = tags
         if namespace:
             upload_args["namespace"] = namespace
 

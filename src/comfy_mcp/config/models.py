@@ -20,6 +20,7 @@ class AppConfig(BaseSettings):
 
     comfy_base_url: AnyUrl = Field(default="http://127.0.0.1:8188")
     workflow_library_root: Path = Field(default=Path("~/.comfy-mcp/workflows"))
+    run_workflow_root: Optional[Path] = Field(default=None)
     include_extra_workflow_roots: bool = Field(default=False)
     api_token: Optional[str] = Field(default=None)
     readonly_mode: bool = Field(default=False)
@@ -33,3 +34,9 @@ class AppConfig(BaseSettings):
     def resolved_workflow_root(self) -> Path:
         """Return expanded path for workflow library root."""
         return self.workflow_library_root.expanduser().resolve()
+
+    def resolved_run_workflow_root(self) -> Path:
+        """Return expanded path for runtime workflow lineage cache."""
+        if self.run_workflow_root is None:
+            return Path(__file__).resolve().parents[3] / "run_workflows"
+        return self.run_workflow_root.expanduser().resolve()

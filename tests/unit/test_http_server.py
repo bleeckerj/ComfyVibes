@@ -19,6 +19,19 @@ def test_health_and_version_include_runtime_info(monkeypatch) -> None:
             "started_at": "2026-02-21T12:00:00+00:00",
         },
     )
+    monkeypatch.setattr(
+        "comfy_mcp.mcp_server.http_server.build_tool_registry",
+        lambda config: (
+            [
+                {
+                    "name": "workflows_import_from_artifact",
+                    "description": "",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }
+            ],
+            {"workflows_import_from_artifact": lambda: {"ok": True}},
+        ),
+    )
     app = create_http_app(AppConfig())
     client = TestClient(app)
 
@@ -42,14 +55,22 @@ def test_health_and_version_include_runtime_info(monkeypatch) -> None:
     assert version_payload["tool_count"] > 0
 
 
-def test_call_tool_filters_unexpected_kwargs(monkeypatch) -> None:
+def test_call_tool_rejects_unexpected_kwargs(monkeypatch) -> None:
     def strict_handler(path: str, workflow_id: str) -> dict:
         return {"path": path, "workflow_id": workflow_id}
 
     monkeypatch.setattr(
         "comfy_mcp.mcp_server.http_server.build_tool_registry",
         lambda config: (
-            [{"name": "workflows_import_from_artifact", "description": "", "inputSchema": {"type": "object"}}],
+            [{
+                "name": "workflows_import_from_artifact",
+                "description": "",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}, "workflow_id": {"type": "string"}},
+                    "required": ["path", "workflow_id"],
+                },
+            }],
             {"workflows_import_from_artifact": strict_handler},
         ),
     )
@@ -60,10 +81,10 @@ def test_call_tool_filters_unexpected_kwargs(monkeypatch) -> None:
         "/tools/workflows_import_from_artifact",
         json={"path": "/tmp/fake.png", "workflow_id": "demo", "overrides": {"x": 1}},
     )
-    assert response.status_code == 200
+    assert response.status_code == 400
     payload = response.json()
-    assert payload["ok"] is True
-    assert payload["result"] == {"path": "/tmp/fake.png", "workflow_id": "demo"}
+    assert payload["ok"] is False
+    assert "Unknown parameter(s): overrides" in payload["error"]
 
 
 def test_call_tool_unwraps_input_wrapper(monkeypatch) -> None:
@@ -73,7 +94,15 @@ def test_call_tool_unwraps_input_wrapper(monkeypatch) -> None:
     monkeypatch.setattr(
         "comfy_mcp.mcp_server.http_server.build_tool_registry",
         lambda config: (
-            [{"name": "workflows_run_aspect_ratio_adjustment", "description": "", "inputSchema": {"type": "object"}}],
+            [{
+                "name": "workflows_run_aspect_ratio_adjustment",
+                "description": "",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"image_path": {"type": "string"}, "aspect_ratio": {"type": "string"}},
+                    "required": ["image_path", "aspect_ratio"],
+                },
+            }],
             {"workflows_run_aspect_ratio_adjustment": strict_handler},
         ),
     )
@@ -97,7 +126,15 @@ def test_call_tool_unwraps_nested_arguments_wrapper(monkeypatch) -> None:
     monkeypatch.setattr(
         "comfy_mcp.mcp_server.http_server.build_tool_registry",
         lambda config: (
-            [{"name": "workflows_run_aspect_ratio_adjustment", "description": "", "inputSchema": {"type": "object"}}],
+            [{
+                "name": "workflows_run_aspect_ratio_adjustment",
+                "description": "",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"image_path": {"type": "string"}, "aspect_ratio": {"type": "string"}},
+                    "required": ["image_path", "aspect_ratio"],
+                },
+            }],
             {"workflows_run_aspect_ratio_adjustment": strict_handler},
         ),
     )
@@ -121,7 +158,15 @@ def test_call_tool_maps_camelcase_to_snakecase(monkeypatch) -> None:
     monkeypatch.setattr(
         "comfy_mcp.mcp_server.http_server.build_tool_registry",
         lambda config: (
-            [{"name": "workflows_import_from_photarium", "description": "", "inputSchema": {"type": "object"}}],
+            [{
+                "name": "workflows_import_from_photarium",
+                "description": "",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"image_id": {"type": "string"}, "workflow_id": {"type": "string"}},
+                    "required": ["image_id", "workflow_id"],
+                },
+            }],
             {"workflows_import_from_photarium": strict_handler},
         ),
     )
@@ -136,3 +181,32 @@ def test_call_tool_maps_camelcase_to_snakecase(monkeypatch) -> None:
     payload = response.json()
     assert payload["ok"] is True
     assert payload["result"] == {"image_id": "img-123", "workflow_id": "wf-123"}
+
+
+def test_call_tool_rejects_missing_required_fields(monkeypatch) -> None:
+    def strict_handler(path: str, workflow_id: str) -> dict:
+        return {"path": path, "workflow_id": workflow_id}
+
+    monkeypatch.setattr(
+        "comfy_mcp.mcp_server.http_server.build_tool_registry",
+        lambda config: (
+            [{
+                "name": "workflows_import_from_artifact",
+                "description": "",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}, "workflow_id": {"type": "string"}},
+                    "required": ["path", "workflow_id"],
+                },
+            }],
+            {"workflows_import_from_artifact": strict_handler},
+        ),
+    )
+    app = create_http_app(AppConfig())
+    client = TestClient(app)
+
+    response = client.post("/tools/workflows_import_from_artifact", json={"path": "/tmp/fake.png"})
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["ok"] is False
+    assert "Missing required parameter(s): workflow_id" in payload["error"]

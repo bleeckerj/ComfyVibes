@@ -149,6 +149,26 @@ class FakeExtractor:
         )()
 
 
+class StaticExtractor:
+    """Extractor returning a fixed workflow for lineage/run-from-source tests."""
+
+    def __init__(self, workflow: dict[str, Any]) -> None:
+        self.workflow = workflow
+        self.calls: list[str] = []
+
+    def extract_from_path(self, path: str, preserve_format: bool = False):
+        self.calls.append(path)
+        return type(
+            "Result",
+            (),
+            {
+                "workflow": self.workflow,
+                "workflow_format": "api",
+                "raw_metadata": {"source": path},
+            },
+        )()
+
+
 @pytest.mark.asyncio
 async def test_comfy_tools_read_methods() -> None:
     """Comfy tools should proxy to ComfyClient read calls."""
@@ -1159,6 +1179,139 @@ async def test_workflow_tools_extract_from_photarium_downloads_original_when_nee
     assert isinstance(result.get("workflow"), dict)
     assert result["workflow"]["1"]["class_type"] == "KSampler"
     assert result["extraction_source"] == "photarium_download_original"
+
+
+@pytest.mark.asyncio
+async def test_workflow_tools_run_from_source_single_loadimage_auto_binds_and_runs(tmp_path: Path) -> None:
+    store = WorkflowStore(tmp_path / "workflows")
+    run_store = WorkflowStore(tmp_path / "run_workflows")
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    workflow = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1, "denoise": 0.55}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "default prompt"}},
+    }
+    client = FakeComfyClient()
+    tools = WorkflowTools(store, client, policy, extractor=StaticExtractor(workflow), run_store=run_store)
+    source_image = tmp_path / "source.png"
+    source_image.write_bytes(b"fakepng")
+
+    result = await tools.run_from_source(source=str(source_image), source_kind="file_path")
+
+    assert result["status"] == "complete"
+    assert result["workflow_family"] == "image_to_image"
+    assert result["cache_hit"] is False
+    assert result["prompt_id"] == "abc123"
+    assert client.last_prompt is not None
+    assert client.last_prompt["1"]["inputs"]["image"] == "source.png"
+    lineage = tools.lineage_get(lineage_run_id=result["lineage_run_id"])
+    assert lineage["lineage"]["workflow_family"] == "image_to_image"
+
+
+@pytest.mark.asyncio
+async def test_workflow_tools_run_from_source_stitch_needs_input_when_no_lineage(tmp_path: Path) -> None:
+    store = WorkflowStore(tmp_path / "workflows")
+    run_store = WorkflowStore(tmp_path / "run_workflows")
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    workflow = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "b.png"}},
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1}},
+    }
+    client = FakeComfyClient()
+    tools = WorkflowTools(store, client, policy, extractor=StaticExtractor(workflow), run_store=run_store)
+    source_image = tmp_path / "source.png"
+    source_image.write_bytes(b"fakepng")
+
+    result = await tools.run_from_source(source=str(source_image), source_kind="file_path")
+
+    assert result["status"] == "needs_input"
+    assert result["workflow_family"] == "image_stitch"
+    assert result["resume_token"] == result["lineage_run_id"]
+    assert [item["name"] for item in result["missing_required_inputs"]] == ["image", "image_2"]
+    assert client.last_prompt is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_tools_run_from_source_reuses_cached_source_image_id(tmp_path: Path, monkeypatch) -> None:
+    store = WorkflowStore(tmp_path / "workflows")
+    run_store = WorkflowStore(tmp_path / "run_workflows")
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    workflow = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
+        "3": {"class_type": "KSampler", "inputs": {"seed": 123}},
+    }
+    client = FakeComfyClient()
+    tools = WorkflowTools(store, client, policy, extractor=StaticExtractor(workflow), run_store=run_store)
+    remote_calls: list[str] = []
+
+    async def _fake_remote(base_url: str, tool_name: str, args: dict):
+        remote_calls.append(tool_name)
+        if tool_name == "photarium_download_original":
+            saved = Path(args["savePath"])
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            saved.write_bytes(b"fakepng")
+            return {"savedPath": str(saved), "filename": "source.png"}
+        if tool_name == "photarium_extract_workflow":
+            return {"extracted": True, "prompt": workflow}
+        raise AssertionError(f"Unexpected remote tool call: {tool_name}")
+
+    monkeypatch.setattr(tools, "_call_remote_tool", _fake_remote)
+
+    first = await tools.run_from_source(source="img_source", source_kind="photarium_id", namespace="cf-default")
+    second = await tools.run_from_source(source="img_source", source_kind="photarium_id", namespace="cf-default")
+
+    assert first["status"] == "complete"
+    assert second["status"] == "complete"
+    assert second["cache_hit"] is True
+    assert remote_calls.count("photarium_extract_workflow") == 1
+    assert remote_calls.count("photarium_download_original") == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_tools_run_from_source_reuses_result_image_id_after_registration(tmp_path: Path) -> None:
+    store = WorkflowStore(tmp_path / "workflows")
+    run_store = WorkflowStore(tmp_path / "run_workflows")
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
+    workflow = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "b.png"}},
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1}},
+    }
+    client = FakeComfyClient()
+    tools = WorkflowTools(store, client, policy, extractor=StaticExtractor(workflow), run_store=run_store)
+
+    source_image = tmp_path / "source.png"
+    source_image.write_bytes(b"fakepng")
+    image_a = tmp_path / "input_a.png"
+    image_b = tmp_path / "input_b.png"
+    image_a.write_bytes(b"a")
+    image_b.write_bytes(b"b")
+
+    prepared = await tools.run_from_source(source=str(source_image), source_kind="file_path")
+    assert prepared["status"] == "needs_input"
+
+    resumed = await tools.run_from_source(
+        resume_token=prepared["resume_token"],
+        overrides={"image": str(image_a), "image_2": str(image_b)},
+    )
+    assert resumed["status"] == "complete"
+
+    registered = tools.lineage_register_results(
+        lineage_run_id=resumed["lineage_run_id"],
+        results=[{"image_id": "img_result"}],
+    )
+    assert registered["result_image_ids"] == ["img_result"]
+
+    reused = await tools.run_from_source(source="img_result", source_kind="photarium_id")
+
+    assert reused["status"] == "complete"
+    assert reused["cache_hit"] is True
+    assert client.last_prompt is not None
+    assert client.last_prompt["1"]["inputs"]["image"] == "input_a.png"
+    assert client.last_prompt["2"]["inputs"]["image"] == "input_b.png"
+    lineage = tools.lineage_get(image_id="img_result")
+    assert lineage["lineage_run_id"] == resumed["lineage_run_id"]
 
 
 def test_workflow_tools_recompile_updates_param_schema_and_hash(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import types
 from contextlib import asynccontextmanager
 
@@ -29,6 +30,7 @@ def _install_fake_mcp_modules(monkeypatch, tools, export_client_symbols: bool = 
     fake_client = types.ModuleType("mcp.client")
     fake_stdio = types.ModuleType("mcp.client.stdio")
     fake_session = types.ModuleType("mcp.client.session")
+    captured = {}
 
     class StdioServerParameters:
         def __init__(self, command, args, env=None, cwd=None):
@@ -38,7 +40,8 @@ def _install_fake_mcp_modules(monkeypatch, tools, export_client_symbols: bool = 
             self.cwd = cwd
 
     @asynccontextmanager
-    async def stdio_client(params):
+    async def stdio_client(params, errlog=None):
+        captured["errlog"] = errlog
         yield ("read", "write")
 
     class ClientSession:
@@ -61,6 +64,7 @@ def _install_fake_mcp_modules(monkeypatch, tools, export_client_symbols: bool = 
     monkeypatch.setitem(__import__("sys").modules, "mcp.client", fake_client)
     monkeypatch.setitem(__import__("sys").modules, "mcp.client.stdio", fake_stdio)
     monkeypatch.setitem(__import__("sys").modules, "mcp.client.session", fake_session)
+    return captured
 
 
 def _install_failing_stdio(monkeypatch):
@@ -76,7 +80,7 @@ def _install_failing_stdio(monkeypatch):
             self.cwd = cwd
 
     @asynccontextmanager
-    async def stdio_client(params):
+    async def stdio_client(params, errlog=None):
         raise RuntimeError("boom")
         yield
 
@@ -92,10 +96,50 @@ def _install_failing_stdio(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "mcp.client.session", fake_session)
 
 
+def _install_cancelled_session(monkeypatch):
+    fake_client = types.ModuleType("mcp.client")
+    fake_stdio = types.ModuleType("mcp.client.stdio")
+    fake_session = types.ModuleType("mcp.client.session")
+
+    class StdioServerParameters:
+        def __init__(self, command, args, env=None, cwd=None):
+            self.command = command
+            self.args = args
+            self.env = env
+            self.cwd = cwd
+
+    @asynccontextmanager
+    async def stdio_client(params, errlog=None):
+        yield ("read", "write")
+
+    class ClientSession:
+        def __init__(self, read_stream, write_stream):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def initialize(self):
+            raise asyncio.CancelledError()
+
+    fake_client.ClientSession = ClientSession
+    fake_client.StdioServerParameters = StdioServerParameters
+    fake_stdio.stdio_client = stdio_client
+    fake_stdio.StdioServerParameters = StdioServerParameters
+    fake_session.ClientSession = ClientSession
+
+    monkeypatch.setitem(__import__("sys").modules, "mcp.client", fake_client)
+    monkeypatch.setitem(__import__("sys").modules, "mcp.client.stdio", fake_stdio)
+    monkeypatch.setitem(__import__("sys").modules, "mcp.client.session", fake_session)
+
+
 @pytest.mark.asyncio
 async def test_router_connect_and_call(monkeypatch):
     tools = [
-        {"name": "workflows.list", "description": "List workflows", "inputSchema": {"type": "object"}},
+        {"name": "workflows_list", "description": "List workflows", "inputSchema": {"type": "object"}},
     ]
     _install_fake_mcp_modules(monkeypatch, tools)
 
@@ -112,9 +156,9 @@ async def test_router_connect_and_call(monkeypatch):
 
     await router.connect()
     specs = router.list_tool_specs()
-    assert specs == [ToolSpec(name="workflows.list", description="List workflows", input_schema={"type": "object"})]
+    assert specs == [ToolSpec(name="workflows_list", description="List workflows", input_schema={"type": "object"}, server="comfy")]
 
-    result = await router.call_tool("workflows.list", {"limit": 1})
+    result = await router.call_tool("workflows_list", {"limit": 1})
     assert result["ok"] is True
     assert result["payload"] == {"limit": 1}
 
@@ -132,14 +176,37 @@ async def test_router_unknown_tool(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_router_reports_stdio_connection_statuses(monkeypatch):
+    _install_fake_mcp_modules(monkeypatch, [])
+    router = MCPToolRouter([ServerConfig(name="digester", command="python", args=["mcp_digester_server.py"], cwd="/tmp")])
+    await router.connect()
+    try:
+        statuses = await router.get_server_connection_statuses()
+        assert statuses == [
+            {
+                "name": "digester",
+                "transport": "stdio",
+                "ok": True,
+                "connected": True,
+                "command": "python",
+                "args": ["mcp_digester_server.py"],
+                "cwd": "/tmp",
+                "stderr_log_path": str(__import__("pathlib").Path.cwd() / ".mcp_chat_logs" / "stdio" / "digester.stderr.log"),
+            }
+        ]
+    finally:
+        await router.close()
+
+
+@pytest.mark.asyncio
 async def test_router_connect_with_new_mcp_import_layout(monkeypatch):
-    tools = [{"name": "workflows.list", "description": "List workflows", "inputSchema": {"type": "object"}}]
+    tools = [{"name": "workflows_list", "description": "List workflows", "inputSchema": {"type": "object"}}]
     _install_fake_mcp_modules(monkeypatch, tools, export_client_symbols=False)
     router = MCPToolRouter([ServerConfig(name="comfy", command="python")])
     await router.connect()
     specs = router.list_tool_specs()
     assert len(specs) == 1
-    assert specs[0].name == "workflows.list"
+    assert specs[0].name == "workflows_list"
     await router.close()
 
 
@@ -153,6 +220,7 @@ async def test_router_error_message_includes_server(monkeypatch):
     text = str(exc.value)
     assert "photarium" in text
     assert "dist/index.js" in text
+    assert "photarium.stderr.log" in text
 
 
 @pytest.mark.asyncio
@@ -160,8 +228,126 @@ async def test_router_close_suppresses_cancel_scope_mismatch():
     router = MCPToolRouter([])
 
     class BadStack:
-        async def __aexit__(self, exc_type, exc, tb):
+        async def aclose(self):
             raise RuntimeError("Attempted to exit cancel scope in a different task than it was entered in")
 
     router._stack = BadStack()
     await router.close()
+
+
+@pytest.mark.asyncio
+async def test_router_close_suppresses_grouped_stdio_shutdown_noise():
+    router = MCPToolRouter([])
+
+    class BadStack:
+        async def aclose(self):
+            raise BaseExceptionGroup(
+                "unhandled errors in a TaskGroup",
+                [
+                    GeneratorExit(),
+                    RuntimeError("Attempted to exit cancel scope in a different task than it was entered in"),
+                ],
+            )
+
+    router._stack = BadStack()
+    await router.close()
+
+
+@pytest.mark.asyncio
+async def test_router_close_suppresses_grouped_cancelled_stdio_shutdown_noise():
+    router = MCPToolRouter([])
+
+    class BadStack:
+        async def aclose(self):
+            raise BaseExceptionGroup(
+                "unhandled errors in a TaskGroup",
+                [
+                    asyncio.CancelledError(),
+                    RuntimeError("Attempted to exit cancel scope in a different task than it was entered in"),
+                ],
+            )
+
+    router._stack = BadStack()
+    await router.close()
+
+
+@pytest.mark.asyncio
+async def test_router_connect_closes_stack_on_cancelled_initialize(monkeypatch):
+    _install_cancelled_session(monkeypatch)
+    router = MCPToolRouter([ServerConfig(name="comfy", command="python")])
+    with pytest.raises(asyncio.CancelledError):
+        await router.connect()
+    assert router._stack is None
+
+
+@pytest.mark.asyncio
+async def test_router_parses_json_from_text_content(monkeypatch):
+    tools = [
+        {"name": "editorial_ads_preview", "description": "Preview ads", "inputSchema": {"type": "object"}},
+    ]
+
+    fake_client = types.ModuleType("mcp.client")
+    fake_stdio = types.ModuleType("mcp.client.stdio")
+    fake_session = types.ModuleType("mcp.client.session")
+
+    class StdioServerParameters:
+        def __init__(self, command, args, env=None, cwd=None):
+            self.command = command
+            self.args = args
+            self.env = env
+            self.cwd = cwd
+
+    @asynccontextmanager
+    async def stdio_client(params, errlog=None):
+        yield ("read", "write")
+
+    class JsonContentSession(FakeSession):
+        async def call_tool(self, name, payload):
+            self.calls.append((name, payload))
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\"previewUrl\":\"http://127.0.0.1:8788/ads/preview\"}",
+                    }
+                ]
+            }
+
+    class ClientSession:
+        def __init__(self, read_stream, write_stream):
+            self._session = JsonContentSession(tools)
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    fake_client.ClientSession = ClientSession
+    fake_client.StdioServerParameters = StdioServerParameters
+    fake_stdio.stdio_client = stdio_client
+    fake_stdio.StdioServerParameters = StdioServerParameters
+    fake_session.ClientSession = ClientSession
+
+    monkeypatch.setitem(__import__("sys").modules, "mcp.client", fake_client)
+    monkeypatch.setitem(__import__("sys").modules, "mcp.client.stdio", fake_stdio)
+    monkeypatch.setitem(__import__("sys").modules, "mcp.client.session", fake_session)
+
+    router = MCPToolRouter([ServerConfig(name="editorial", command="node")])
+    await router.connect()
+    result = await router.call_tool("editorial_ads_preview", {"adIds": ["a"]})
+    assert result == {"previewUrl": "http://127.0.0.1:8788/ads/preview"}
+    await router.close()
+
+
+@pytest.mark.asyncio
+async def test_router_routes_stdio_stderr_to_log_file(monkeypatch):
+    captured = _install_fake_mcp_modules(monkeypatch, [])
+    router = MCPToolRouter([ServerConfig(name="photarium", command="node", args=["dist/index.js"])])
+    await router.connect()
+    try:
+        errlog = captured.get("errlog")
+        assert errlog is not None
+        assert getattr(errlog, "name", "").endswith("photarium.stderr.log")
+    finally:
+        await router.close()

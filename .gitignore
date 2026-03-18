@@ -42,6 +42,7 @@ htmlcov/
 *.log
 .mcp_chat_logs/
 .mcp_chat_artifacts/
+run_workflows/
 
 # OS/editor noise
 .DS_Store

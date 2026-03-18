@@ -6,7 +6,10 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Literal, Tuple
+
+ResponseVerbosity = Literal["loud", "lowkey", "quiet"]
+ServerTransport = Literal["stdio", "http"]
 
 
 @dataclass
@@ -27,9 +30,9 @@ class ServerConfig:
     tool_prefixes: List[str] = field(default_factory=list)
     env: Dict[str, str] = field(default_factory=dict)
     cwd: str | None = None
-    # HTTP transport fields (when set, the router uses HTTP instead of stdio)
+    # HTTP transport fields.
     http_url: str | None = None
-    transport: str = "stdio"  # "stdio" or "http"
+    transport: ServerTransport = "stdio"
 
 
 @dataclass
@@ -74,8 +77,10 @@ WORKFLOW_OUTPUT_RELIABILITY_POLICY = PromptPolicy(
         "Do not silently switch workflow_id; if the user names a workflow, keep that exact workflow_id unless the user approves a change.",
         "For workflows_run, always pass an explicit overrides object; never omit it.",
         "Treat shorthand requests like 'edit image xyz' or 'edit image id xyz' as intent that still requires argument synthesis before tool execution: infer/confirm workflow_id, resolve whether xyz is a Photarium image ID vs local path vs Comfy filename, and then construct explicit overrides.",
+        "When the user asks to rerun or recover the workflow from an existing image, prefer workflows_run_from_source over manually chaining extract/import/run steps.",
         "Treat 'catalog' and 'photo catalog' as semantically equivalent to Photarium / Photarium catalog.",
         "Unless user says otherwise, treat 'image' or 'image id' as a Photarium catalog image id.",
+        "If workflows_run_from_source returns needs_input, ask only for the listed missing inputs and resume with resume_token.",
         "If a shorthand image token likely refers to a Photarium image ID, verify it first with photarium_get (or equivalent catalog get tool) before committing to a workflow execution plan; if valid, download/resolve to a local path (or Comfy input filename) before passing it into workflows_run overrides.",
         "For workflows_run image overrides targeting LoadImage.image, use a local file path or Comfy input filename, not a Photarium UUID; if starting from a Photarium UUID, download first.",
         "If a workflow exposes filename_prefix (SaveImage), set a unique value before the first run.",
@@ -94,6 +99,8 @@ WORKFLOW_OUTPUT_RELIABILITY_POLICY = PromptPolicy(
         "Default upload behavior: for workflows_run/workflows_run_aspect_ratio_adjustment results with output_images, upload generated images to Photarium automatically without asking for extra confirmation or a target parent id; only skip when Photarium catalog tools are unavailable or offline.",
         "Default upload behavior: omit tags unless the user explicitly asks for tags or there are clear image-content tags already provided by the user.",
         "When auto-uploading generated outputs without an explicit source/parent image id, upload as new catalog images (no parent linkage).",
+        "When auto-uploading from a source catalog image, deterministically resolve the upload parent in code: if the source image already has parentId/variantOf use that parent; otherwise if familyRootId exists use that root; otherwise use the source image id itself. Never upload a new result as a child of a variant when its family parent/root is known.",
+        "After auto-uploading outputs from workflows_run_from_source, call workflows_lineage_register_results with the returned lineage_run_id and uploaded result image ids.",
         "Do not ask the user whether to upload workflow outputs unless upload fails because Photarium is unavailable/offline.",
         "When uploading generated outputs to Photarium and a prompt is known, set the image metadata prompt (pass prompt/positive_prompt on upload if supported, otherwise call a Photarium metadata update tool after upload). For image_variation_maker, prefer the resolved positive prompt; if unavailable, fall back to image_analysis_instructions.",
         "For image transfer between ComfyUI and Photarium, avoid inline base64 payload flows by default; prefer comfy_download_image + photarium_upload_from_path/upload_url and only request includeData/includeBase64 when the user explicitly asks for raw data.",
@@ -197,6 +204,49 @@ def _with_system_guardrails(system_prompt: str) -> str:
     return composed
 
 
+def render_response_verbosity_appendix(mode: ResponseVerbosity) -> str:
+    normalized: ResponseVerbosity = mode if mode in {"loud", "lowkey", "quiet"} else "lowkey"
+    if normalized == "loud":
+        rules = (
+            "Default to fuller user-facing explanations and higher-context summaries.",
+            "Include brief reasoning and next steps proactively when useful.",
+            "Do not be terse unless the user explicitly asks for brevity.",
+        )
+    elif normalized == "quiet":
+        rules = (
+            "Default to terse replies to save output tokens.",
+            "Use the minimum user-facing text that still communicates outcome, blockers, or next action.",
+            "Avoid extra explanation unless the user explicitly asks for more detail.",
+        )
+    else:
+        rules = (
+            "Default to concise, calm replies with moderate detail.",
+            "Explain decisions briefly, but do not over-elaborate.",
+            "Prefer compact summaries unless more depth is clearly useful.",
+        )
+    lines = [
+        "[POLICY::response_verbosity]",
+        "EDGAR RESPONSE VERBOSITY:",
+        f"- Active mode: {normalized}.",
+    ]
+    lines.extend(f"- {rule}" for rule in rules)
+    return "\n\n" + "\n".join(lines) + "\n"
+
+
+def compose_runtime_system_prompt(base_system_prompt: str, response_verbosity: ResponseVerbosity) -> str:
+    composed = _with_system_guardrails(base_system_prompt)
+    marker = "[POLICY::response_verbosity]"
+    if marker in composed:
+        before, _marker, remainder = composed.partition(marker)
+        remainder_text = remainder
+        next_marker = remainder_text.find("\n\n[POLICY::")
+        if next_marker != -1:
+            composed = before.rstrip() + remainder_text[next_marker:]
+        else:
+            composed = before.rstrip()
+    return f"{composed.rstrip()}{render_response_verbosity_appendix(response_verbosity)}"
+
+
 def _parse_llm(raw: Dict[str, Any]) -> LLMConfig:
     return LLMConfig(
         base_url=raw.get("base_url", "https://api.openai.com/v1"),
@@ -208,7 +258,17 @@ def _parse_llm(raw: Dict[str, Any]) -> LLMConfig:
     )
 
 
+def _normalize_server_transport(raw: Dict[str, Any]) -> ServerTransport:
+    explicit = raw.get("transport")
+    if explicit is None:
+        return "http" if raw.get("http_url") else "stdio"
+    if explicit in {"stdio", "http"}:
+        return explicit
+    raise ValueError(f"Invalid transport {explicit!r}; expected 'stdio' or 'http'.")
+
+
 def _parse_server(raw: Dict[str, Any]) -> ServerConfig:
+    transport = _normalize_server_transport(raw)
     return ServerConfig(
         name=raw["name"],
         command=raw.get("command", ""),
@@ -217,8 +277,21 @@ def _parse_server(raw: Dict[str, Any]) -> ServerConfig:
         env=dict(raw.get("env", {})),
         cwd=raw.get("cwd"),
         http_url=raw.get("http_url"),
-        transport=raw.get("transport", "stdio"),
+        transport=transport,
     )
+
+
+def _validate_server(server: ServerConfig) -> None:
+    if server.transport == "stdio":
+        if not server.command.strip():
+            raise ValueError(
+                f"Server '{server.name}' uses stdio transport but has no command configured."
+            )
+        return
+    if not (server.http_url or "").strip():
+        raise ValueError(
+            f"Server '{server.name}' uses HTTP transport but has no http_url configured."
+        )
 
 
 def load_config(path: str | Path, model_override: str | None = None) -> ChatClientConfig:
@@ -228,7 +301,9 @@ def load_config(path: str | Path, model_override: str | None = None) -> ChatClie
     if model_override:
         llm.model = model_override
     servers = [_parse_server(item) for item in payload.get("servers", [])]
-    system_prompt = _with_system_guardrails(payload.get("system_prompt", DEFAULT_SYSTEM_PROMPT))
+    for server in servers:
+        _validate_server(server)
+    system_prompt = compose_runtime_system_prompt(payload.get("system_prompt", DEFAULT_SYSTEM_PROMPT), "lowkey")
     return ChatClientConfig(
         llm=llm,
         servers=servers,

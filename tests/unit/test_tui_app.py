@@ -3,10 +3,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-from comfy_mcp.tui_client.app import ChatApp, _normalize_openai_tool_schema, _strip_border_glyphs
-from comfy_mcp.tui_client.config import ChatClientConfig, LLMConfig, ServerConfig
+import pytest
+
+from comfy_mcp.tui_client.app import (
+    ChatApp,
+    _is_known_stdio_asyncgen_shutdown_context,
+    _is_known_stdio_asyncgen_unraisable,
+    _normalize_openai_tool_schema,
+    _strip_border_glyphs,
+    _suppress_known_stdio_asyncgen_unraisables,
+)
+from comfy_mcp.tui_client.config import ChatClientConfig, LLMConfig, ServerConfig, compose_runtime_system_prompt
 from comfy_mcp.tui_client.mcp_router import ToolSpec
 from comfy_mcp.tui_client.orchestrator import ToolEvent
 
@@ -77,6 +88,138 @@ def test_to_openai_tool(monkeypatch):
     assert tool["function"]["name"] == "workflows.list"
     assert tool["function"]["description"] == "List workflows"
     assert tool["function"]["parameters"] == {"type": "object"}
+
+
+def test_chat_app_keeps_orchestrator_router_in_sync_after_router_rebuild(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class _Router:
+        pass
+
+    routers = [_Router(), _Router()]
+
+    import comfy_mcp.tui_client.app as app_mod
+
+    def _fake_build_router(_config):  # noqa: ANN001
+        return routers.pop(0)
+
+    monkeypatch.setattr(app_mod, "_build_router", _fake_build_router)
+
+    app = ChatApp(_config())
+
+    assert app._router is app._orchestrator._router
+
+
+@pytest.mark.asyncio
+async def test_on_shutdown_waits_for_router_close_even_if_cancelled(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+
+    started = asyncio.Event()
+    allow_finish = asyncio.Event()
+    finished = asyncio.Event()
+
+    class _Router:
+        async def close(self) -> None:
+            started.set()
+            await allow_finish.wait()
+            finished.set()
+
+    app._router = _Router()
+    task = asyncio.create_task(app.on_shutdown())
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    allow_finish.set()
+    await task
+    assert finished.is_set()
+
+
+def test_is_known_stdio_asyncgen_unraisable_matches_expected_shape():
+    unraisable = SimpleNamespace(
+        err_msg="an error occurred during closing of asynchronous generator",
+        object="<async_generator object stdio_client at 0x1234>",
+        exc_value=RuntimeError("Attempted to exit cancel scope in a different task than it was entered in"),
+    )
+    assert _is_known_stdio_asyncgen_unraisable(unraisable) is True
+
+
+def test_is_known_stdio_asyncgen_unraisable_rejects_other_unraisables():
+    unraisable = SimpleNamespace(
+        err_msg="some other error",
+        object="<async_generator object something_else at 0x1234>",
+        exc_value=RuntimeError("boom"),
+    )
+    assert _is_known_stdio_asyncgen_unraisable(unraisable) is False
+
+
+def test_is_known_stdio_asyncgen_shutdown_context_matches_expected_shape():
+    context = {
+        "message": "an error occurred during closing of asynchronous generator",
+        "asyncgen": "<async_generator object stdio_client at 0x1234>",
+        "exception": RuntimeError("Attempted to exit cancel scope in a different task than it was entered in"),
+    }
+    assert _is_known_stdio_asyncgen_shutdown_context(context) is True
+
+
+def test_suppress_known_stdio_asyncgen_unraisables_restores_previous_hook(monkeypatch):
+    calls: list[object] = []
+
+    def _previous(unraisable):  # noqa: ANN001
+        calls.append(unraisable)
+
+    monkeypatch.setattr("sys.unraisablehook", _previous)
+
+    suppressed = SimpleNamespace(
+        err_msg="an error occurred during closing of asynchronous generator",
+        object="<async_generator object stdio_client at 0x1234>",
+        exc_value=RuntimeError("Attempted to exit cancel scope in a different task than it was entered in"),
+    )
+    forwarded = SimpleNamespace(
+        err_msg="other unraisable",
+        object="<object object at 0x5678>",
+        exc_value=RuntimeError("boom"),
+    )
+
+    with _suppress_known_stdio_asyncgen_unraisables():
+        hook = sys.unraisablehook
+        hook(suppressed)
+        hook(forwarded)
+
+    assert calls == [forwarded]
+    assert sys.unraisablehook is _previous
+
+
+@pytest.mark.asyncio
+async def test_install_loop_exception_handler_suppresses_known_stdio_asyncgen_context(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    loop = asyncio.get_running_loop()
+    forwarded: list[dict[str, object]] = []
+
+    def _previous(_loop, context):  # noqa: ANN001
+        forwarded.append(context)
+
+    loop.set_exception_handler(_previous)
+    app._install_loop_exception_handler()
+    handler = loop.get_exception_handler()
+    assert handler is not None
+
+    suppressed = {
+        "message": "an error occurred during closing of asynchronous generator",
+        "asyncgen": "<async_generator object stdio_client at 0x1234>",
+        "exception": RuntimeError("Attempted to exit cancel scope in a different task than it was entered in"),
+    }
+    forwarded_context = {
+        "message": "ordinary loop error",
+        "exception": RuntimeError("boom"),
+    }
+
+    handler(loop, suppressed)
+    handler(loop, forwarded_context)
+
+    assert forwarded == [forwarded_context]
+    loop.set_exception_handler(None)
 
 
 def test_to_openai_tool_normalizes_array_items(monkeypatch):
@@ -182,6 +325,74 @@ def test_config_parse_strict_tool_facts_default(tmp_path):
     assert cfg.tool_description_hints == {}
 
 
+def test_config_parse_infers_http_transport_from_http_url(tmp_path):
+    from comfy_mcp.tui_client.config import load_config
+
+    payload = """
+{
+  "llm": {"base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-4o-mini"},
+  "servers": [
+    {"name":"photarium","http_url":"http://127.0.0.1:8787"}
+  ]
+}
+"""
+    cfg_file = tmp_path / "cfg.json"
+    cfg_file.write_text(payload)
+    cfg = load_config(cfg_file)
+    assert cfg.servers[0].transport == "http"
+
+
+def test_config_parse_infers_stdio_transport_from_command_only(tmp_path):
+    from comfy_mcp.tui_client.config import load_config
+
+    payload = """
+{
+  "llm": {"base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-4o-mini"},
+  "servers": [
+    {"name":"digester","command":"python","args":["mcp_digester_server.py"]}
+  ]
+}
+"""
+    cfg_file = tmp_path / "cfg.json"
+    cfg_file.write_text(payload)
+    cfg = load_config(cfg_file)
+    assert cfg.servers[0].transport == "stdio"
+
+
+def test_config_parse_rejects_http_server_without_url(tmp_path):
+    from comfy_mcp.tui_client.config import load_config
+
+    payload = """
+{
+  "llm": {"base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-4o-mini"},
+  "servers": [
+    {"name":"photarium","transport":"http"}
+  ]
+}
+"""
+    cfg_file = tmp_path / "cfg.json"
+    cfg_file.write_text(payload)
+    with pytest.raises(ValueError, match="http_url"):
+        load_config(cfg_file)
+
+
+def test_config_parse_rejects_stdio_server_without_command(tmp_path):
+    from comfy_mcp.tui_client.config import load_config
+
+    payload = """
+{
+  "llm": {"base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-4o-mini"},
+  "servers": [
+    {"name":"backoffice","transport":"stdio"}
+  ]
+}
+"""
+    cfg_file = tmp_path / "cfg.json"
+    cfg_file.write_text(payload)
+    with pytest.raises(ValueError, match="no command"):
+        load_config(cfg_file)
+
+
 def test_config_appends_prompt_policies(tmp_path):
     from comfy_mcp.tui_client.config import load_config
 
@@ -250,6 +461,17 @@ def test_config_does_not_duplicate_existing_policy_and_keeps_order(tmp_path):
     assert cfg.system_prompt.index("TOOL DISCOVERY AND CAPABILITY CHECK:") < cfg.system_prompt.index(
         "# EDGAR Orchestrator Routing Policy (Editorial vs Workflow Tools)"
     )
+
+
+def test_compose_runtime_system_prompt_replaces_verbosity_policy_without_duplication():
+    prompt = compose_runtime_system_prompt("custom prompt", "quiet")
+    assert prompt.count("[POLICY::response_verbosity]") == 1
+    assert "Active mode: quiet." in prompt
+
+    updated = compose_runtime_system_prompt(prompt, "loud")
+    assert updated.count("[POLICY::response_verbosity]") == 1
+    assert "Active mode: loud." in updated
+    assert "Active mode: quiet." not in updated
 
 
 def test_to_openai_tool_appends_tool_description_hint(monkeypatch):
@@ -467,6 +689,71 @@ def test_process_message_editorial_preview_uses_tool_grounded_urls(monkeypatch):
     assert not any(line.startswith("EDGAR: These URLs might be guessed") for line in chat_lines)
 
 
+def test_process_message_recent_signals_uses_tool_grounded_rows(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config = _config()
+    config.strict_tool_facts = False
+    app = ChatApp(config)
+    chat_lines: list[str] = []
+    tool_lines: list[str] = []
+
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    app._write_tools = lambda _markup, plain: tool_lines.append(plain)
+
+    async def _fake_process(user_text, on_progress=None, stop_after_tool_calls=False):  # noqa: ANN001
+        assert user_text == "give me the last 3 signals with summary"
+        assert stop_after_tool_calls is False
+        return (
+            "Only got two signals.",
+            [
+                ToolEvent(
+                    name="digester_signals_list_summaries",
+                    arguments={"limit": 3},
+                    result={
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(
+                                    {
+                                        "count": 3,
+                                        "items": [
+                                            {
+                                                "signal_id": "sig-001",
+                                                "headline": "First signal",
+                                                "hook_preview": "First summary",
+                                            },
+                                            {
+                                                "signal_id": "sig-002",
+                                                "headline": "Second signal",
+                                                "hook_preview": "Second summary",
+                                            },
+                                            {
+                                                "signal_id": "sig-003",
+                                                "headline": "Third signal",
+                                                "hook_preview": "Third summary",
+                                            },
+                                        ],
+                                    }
+                                ),
+                            }
+                        ]
+                    },
+                    error=None,
+                )
+            ],
+        )
+
+    app._orchestrator.process = _fake_process
+
+    asyncio.run(app._process_message("give me the last 3 signals with summary"))
+
+    assert any("Tool-grounded recent signals" in line for line in chat_lines)
+    assert any(line.startswith("1) sig-001 — First signal — First summary") for line in chat_lines)
+    assert any(line.startswith("2) sig-002 — Second signal — Second summary") for line in chat_lines)
+    assert any(line.startswith("3) sig-003 — Third signal — Third summary") for line in chat_lines)
+    assert not any(line.startswith("EDGAR: Only got two signals.") for line in chat_lines)
+
+
 def test_request_queue_serializes_prompts(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     app = ChatApp(_config())
@@ -542,6 +829,10 @@ def test_help_command_outputs_command_list(monkeypatch):
     assert any("/help" in line for line in chat_lines)
     assert any("/status" in line for line in chat_lines)
     assert any("/reset" in line for line in chat_lines)
+    assert any("/showtoolstate" in line for line in chat_lines)
+    assert any("/turnon" in line for line in chat_lines)
+    assert any("/turnoff" in line for line in chat_lines)
+    assert any("/verbosity loud|lowkey|quiet" in line for line in chat_lines)
     assert any("/aspect" in line for line in chat_lines)
     assert any("/ar" in line for line in chat_lines)
     assert any("/importwf" in line for line in chat_lines)
@@ -555,6 +846,44 @@ def test_help_command_outputs_command_list(monkeypatch):
     assert any("Opt+Backspace / Opt+D" in line for line in chat_lines)
     assert any("Ctrl+Shift+Up / Ctrl+Shift+Down" in line for line in chat_lines)
     assert any("F6 / F7 / F8 copy Chat / Tools / All" in line for line in chat_lines)
+
+
+def test_toolstate_command_outputs_server_states(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    handled = app._handle_local_command("/showtoolstate")
+
+    assert handled is True
+    assert any("Tool state (servers)" in line for line in chat_lines)
+    assert any("comfy" in line for line in chat_lines)
+
+
+def test_turnoff_command_disables_server_and_triggers_reconnect(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    reconnect_calls: list[bool] = []
+
+    async def _fake_reconnect():
+        reconnect_calls.append(True)
+
+    app._reconnect_tools = _fake_reconnect
+
+    def _run_worker(coro, **_kwargs):  # noqa: ANN001
+        asyncio.run(coro)
+
+    app.run_worker = _run_worker  # type: ignore[assignment]
+
+    handled = app._handle_local_command("/turnoff comfy")
+
+    assert handled is True
+    assert app._server_enabled["comfy"] is False
+    assert any("Server comfy: OFF." in line for line in chat_lines)
+    assert reconnect_calls == [True]
 
 
 def test_status_command_outputs_summary(monkeypatch):
@@ -579,7 +908,58 @@ def test_status_command_outputs_summary(monkeypatch):
     assert any("Session status:" in line for line in chat_lines)
     assert any("ready: True" in line for line in chat_lines)
     assert any("model:" in line for line in chat_lines)
+    assert any("response_verbosity: lowkey" in line for line in chat_lines)
     assert any("discovered tools: 1" in line for line in chat_lines)
+
+
+def test_verbosity_command_updates_runtime_system_prompt(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    handled = app._handle_local_command("/verbosity quiet")
+
+    assert handled is True
+    assert app._response_verbosity == "quiet"
+    assert chat_lines[-1] == "EDGAR response mode set to quiet."
+    assert "Active mode: quiet." in app._orchestrator._messages[0]["content"]
+
+
+def test_natural_language_verbosity_alias_updates_runtime_system_prompt(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    handled = app._handle_local_command("EDGAR just whisper")
+
+    assert handled is True
+    assert app._response_verbosity == "quiet"
+    assert chat_lines[-1] == "EDGAR response mode set to quiet."
+
+
+def test_load_ui_preferences_restores_response_verbosity(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._ui_prefs_path = tmp_path / "prefs.json"
+    app._ui_prefs_path.write_text(
+        json.dumps(
+            {
+                "input_height_lines": 7,
+                "prompt_history": ["first", "second"],
+                "response_verbosity": "loud",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    app._response_verbosity = "lowkey"
+    app._load_ui_preferences()
+    app._apply_runtime_system_prompt()
+
+    assert app._response_verbosity == "loud"
+    assert "Active mode: loud." in app._orchestrator._messages[0]["content"]
 
 
 def test_startup_shows_edgar_banner(monkeypatch):
@@ -606,6 +986,44 @@ def test_startup_shows_edgar_banner(monkeypatch):
     assert any("Near Future Laboratory" in line for line in chat_lines)
     assert any("Ready. Type a request below." in line for line in chat_lines)
     assert any("Tools ready:" in line for line in tool_lines)
+
+
+def test_startup_renders_stdio_server_diagnostics(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    tool_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    app._write_tools = lambda _markup, plain: tool_lines.append(plain)
+
+    class _Router:
+        async def connect(self):
+            return None
+
+        def list_tool_specs(self):
+            return []
+
+        async def get_server_connection_statuses(self):
+            return [
+                {
+                    "name": "editorial",
+                    "transport": "stdio",
+                    "connected": True,
+                    "command": "/tmp/run_editorial_mcp_server.sh",
+                    "args": [],
+                    "cwd": "/tmp/editorial",
+                }
+            ]
+
+    app._router = _Router()
+    app._orchestrator.set_tools = lambda tools: None
+
+    asyncio.run(app._startup())
+
+    assert any(
+        "editorial (stdio) connected=yes command=/tmp/run_editorial_mcp_server.sh, cwd=/tmp/editorial" in line
+        for line in chat_lines
+    )
 
 
 def test_startup_renders_comfy_server_info_diagnostics(monkeypatch):
@@ -747,7 +1165,7 @@ def test_aspect_command_explicit_help_variants_show_usage(monkeypatch):
         handled = app._handle_local_command(command)
         assert handled is True
         assert any("Aspect Flow Usage" in line for line in chat_lines)
-        assert any("/aspect|/ar|/aspectratio <image_id> targets=" in line for line in chat_lines)
+        assert any("/aspect|/ar <image_id> targets=" in line for line in chat_lines)
 
 
 def test_aspect_command_builds_agentic_flow_prompt(monkeypatch):
@@ -1455,6 +1873,7 @@ def test_input_height_resize_persists_between_sessions(monkeypatch, tmp_path: Pa
     assert payload.get("prompt_history") == []
 
     app2 = ChatApp(_config())
+    app2._load_ui_preferences()
     assert app2._input_height_lines == 8
 
 
@@ -1471,6 +1890,7 @@ def test_prompt_history_persists_between_sessions(monkeypatch, tmp_path: Path):
     assert payload.get("prompt_history") == ["first command", "second command"]
 
     app2 = ChatApp(_config())
+    app2._load_ui_preferences()
     assert app2._prompt_history == ["first command", "second command"]
 
 

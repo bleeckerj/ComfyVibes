@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from comfy_mcp.comfy_client.client import ComfyClient
+from comfy_mcp.comfy_client.errors import ComfyClientError
 
 
 @pytest.mark.asyncio
@@ -104,3 +105,24 @@ def test_prompt_in_queue_handles_list_payload_shape() -> None:
     assert ComfyClient._prompt_in_queue("abc123", queue) is True
     assert ComfyClient._prompt_in_queue("def456", queue) is True
     assert ComfyClient._prompt_in_queue("zzz999", queue) is False
+
+
+@pytest.mark.asyncio
+async def test_queue_prompt_surfaces_error_payload_details() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "type": "missing_node_type",
+                    "message": "Node 'Image_Resizer' not found.",
+                    "details": "Node ID '#30'",
+                }
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(base_url="http://example.com", transport=transport) as client:
+        comfy = ComfyClient(base_url="http://example.com", http_client=client)
+        with pytest.raises(ComfyClientError, match="missing_node_type"):
+            await comfy.queue_prompt({"1": {"class_type": "TestNode", "inputs": {}}})

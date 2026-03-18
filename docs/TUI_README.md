@@ -16,13 +16,17 @@ From `nfl-comfymcp/`:
 
 Both launchers:
 
-1. Ensure Comfy MCP HTTP is reachable (starts it if needed)
-2. Ensure Photarium MCP HTTP is reachable (starts it if needed)
-3. Ensure Editorial MCP HTTP is reachable (starts it if needed)
-4. Ensure Backoffice MCP HTTP is reachable (starts it if needed)
-5. Launch the TUI client
+1. Read `mcp_chat_config.json` and normalize each server transport
+2. Ensure only HTTP-configured MCPs are reachable (starts them if needed)
+3. Leave stdio-configured MCPs for EDGAR to spawn on connect
+4. Launch the TUI client
 
-Digester MCP is configured as a stdio server inside `mcp_chat_config.json` (not an HTTP preflight server), so it starts when the TUI connects.
+The checked-in default transport mix is:
+
+- `stdio`: Comfy, Photarium, Editorial, Backoffice, Digester
+- `http`: Workspace
+
+If you switch a server to `transport: "http"`, the launcher will prestart its daemon. If you switch a server to `transport: "stdio"`, EDGAR will spawn it directly when it connects.
 
 `run_mcp_chat.sh` actions:
 
@@ -38,35 +42,54 @@ Digester MCP is configured as a stdio server inside `mcp_chat_config.json` (not 
 - `/status` shows current session status (model, readiness, tool count, server endpoints, context size).
 - `/reset` clears current TUI chat/tool logs and resets LLM conversation context to only the system prompt.
 
+## Workflow-from-image usage in TUI
+
+There is no dedicated slash command for `workflows_run_from_source`. Use plain chat requests and let EDGAR route to the tool.
+
+Examples:
+
+- `Run the workflow embedded in Photarium image 75e92a7e-2838-45a7-6f2c-32a5fde6c300.`
+- `Run the workflow from /tmp/ComfyUI_01065.png and keep the prompt but set denoise to 0.65.`
+- `Run the workflow from https://example.com/comfy-output.png.`
+- `Rerun the workflow that made image b287f5ef-2901-4e27-f6b4-b483fc4a7e00.`
+
+If the tool replies that it needs more inputs, respond with the missing bindings directly:
+
+- `Use /tmp/input_a.png for image and /tmp/input_b.png for image_2.`
+
+Related local slash commands:
+
+- `/importwf <image_id>` imports an embedded Photarium workflow into the curated workflow catalog.
+- `/imageedit <image_id> <request>` runs the dedicated image-edit flow.
+- `/vary <image_id>` runs the variation flow.
+- `/aspect <image_id> targets=...` runs the aspect-ratio flow.
+
+See also:
+
+- [Workflow Run From Source / Lineage Cache](workflows_run_from_source.README.md)
+
 ## Multiline composer
 
 - The bottom prompt is multiline.
 - Press `Enter` to insert a new line.
 - Press `Ctrl+Enter` to send the message.
 
-## Default ports
+## Default HTTP ports
 
-- Comfy MCP HTTP: `8001`
-- Photarium MCP HTTP: `8787`
-- Editorial MCP HTTP: `8788`
-- Backoffice MCP HTTP: `8766`
+- Workspace MCP HTTP: `8777`
+
+Only HTTP-configured servers use these preflight port checks.
 
 ## Configure ports for launcher preflight
 
-Launchers now read these environment variables for port checks/startup:
+Launchers now read these environment variables for port checks/startup of HTTP-configured servers:
 
-- `COMFY_MCP_HTTP_BIND_PORT` (default `8001`)
-- `PHOTARIUM_HTTP_PORT` (default `8787`)
-- `EDITORIAL_HTTP_PORT` (default `8788`)
-- `BACKOFFICE_HTTP_PORT` (default `8766`)
+- `WORKSPACE_HTTP_PORT` (default `8777`)
 
 Example:
 
 ```bash
-COMFY_MCP_HTTP_BIND_PORT=8101 \
-PHOTARIUM_HTTP_PORT=8790 \
-EDITORIAL_HTTP_PORT=8791 \
-BACKOFFICE_HTTP_PORT=8792 \
+WORKSPACE_HTTP_PORT=8791 \
 ./run_mcp_chat.sh
 ```
 
@@ -78,71 +101,57 @@ Optional related vars:
 - `EDITORIAL_ROOT` (path to `nfl-editorial`)
 - `BACKOFFICE_ROOT` (path to `nfl-backoffice`)
 
-## Configure ports in TUI config
+## Configure transports in TUI config
 
-The TUI tool client reads MCP endpoints from `mcp_chat_config.json`.
-You must keep these URLs aligned with your chosen ports.
+The TUI client reads both HTTP endpoints and stdio commands from `mcp_chat_config.json`.
 
-You can mix HTTP and stdio MCP servers in the same config. Digester is typically configured as stdio:
+You can mix HTTP and stdio MCP servers in the same config. Example stdio entry:
 
 ```json
 {
-  "name": "digester",
-  "command": "/Users/julian/Code/Digester/.venv/bin/python",
-  "args": ["mcp_digester_server.py"],
-  "cwd": "/Users/julian/Code/Digester"
+  "name": "editorial",
+  "transport": "stdio",
+  "command": "/Users/julian/Code/nfl-editorial/run_editorial_mcp_server.sh",
+  "cwd": "/Users/julian/Code/nfl-editorial",
+  "env": {
+    "EDITORIAL_HTTP_ENABLED": "false"
+  }
 }
 ```
 
-Edit `servers[].http_url`:
+Example HTTP entry:
 
 ```json
 {
-  "servers": [
-    {
-      "name": "comfy",
-      "transport": "http",
-      "http_url": "http://127.0.0.1:8101"
-    },
-    {
-      "name": "photarium",
-      "transport": "http",
-      "http_url": "http://127.0.0.1:8790"
-    },
-    {
-      "name": "editorial",
-      "transport": "http",
-      "http_url": "http://127.0.0.1:8791"
-    },
-    {
-      "name": "backoffice",
-      "transport": "http",
-      "http_url": "http://127.0.0.1:8792"
-    }
-  ]
+  "name": "workspace",
+  "transport": "http",
+  "http_url": "http://127.0.0.1:8791"
+}
+```
+
+Example Photarium stdio entry:
+
+```json
+{
+  "name": "photarium",
+  "transport": "stdio",
+  "command": "/Users/julian/Code/cloud-flare-image-handler/run_photarium_mcp_server.sh",
+  "cwd": "/Users/julian/Code/cloud-flare-image-handler",
+  "env": {
+    "PHOTARIUM_HTTP_ENABLED": "false",
+    "PHOTARIUM_BASE_URL": "http://127.0.0.1:3000"
+  }
 }
 ```
 
 ## Typical custom-port workflow
 
 ```bash
-# 1) Start MCP servers on custom ports
-COMFY_MCP_HTTP_BIND_PORT=8101 \
-PHOTARIUM_HTTP_PORT=8790 \
-EDITORIAL_HTTP_PORT=8791 \
-BACKOFFICE_HTTP_PORT=8792 \
-PHOTARIUM_ROOT=/Users/julian/Code/cloud-flare-image-handler \
-EDITORIAL_ROOT=/Users/julian/Code/nfl-editorial \
-BACKOFFICE_ROOT=/Users/julian/Code/nfl-backoffice \
-./run_mcp_processes.sh restart
+# 1) Update HTTP-configured server URLs in mcp_chat_config.json
+#    and keep stdio-configured servers on command/cwd/env entries.
 
-# 2) Update mcp_chat_config.json http_url values to :8101, :8790, :8791, :8792
-
-# 3) Start TUI with same port env vars
-COMFY_MCP_HTTP_BIND_PORT=8101 \
-PHOTARIUM_HTTP_PORT=8790 \
-EDITORIAL_HTTP_PORT=8791 \
-BACKOFFICE_HTTP_PORT=8792 \
+# 2) Start TUI with matching HTTP port env vars
+WORKSPACE_HTTP_PORT=8791 \
 ./run_mcp_chat.sh
 ```
 
@@ -165,6 +174,8 @@ Check listeners:
 ```bash
 ./run_mcp_processes.sh status
 ```
+
+The launcher status output will report stdio-configured servers as EDGAR-managed instead of expecting an HTTP listener.
 
 Stop background servers:
 

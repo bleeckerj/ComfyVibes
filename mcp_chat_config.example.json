@@ -18,6 +18,7 @@
   "servers": [
     {
       "name": "comfy",
+      "transport": "stdio",
       "command": "/ABSOLUTE/PATH/TO/nfl-comfymcp/.venv/bin/python",
       "args": [
         "-m",
@@ -33,38 +34,46 @@
     },
     {
       "name": "photarium",
-      "command": "node",
-      "args": [
-        "dist/index.js"
-      ],
+      "transport": "stdio",
+      "command": "/ABSOLUTE/PATH/TO/cloud-flare-image-handler/run_photarium_mcp_server.sh",
       "tool_prefixes": [
         "photarium_",
         "catalog_"
       ],
-      "cwd": "/ABSOLUTE/PATH/TO/cloud-flare-image-handler/mcp-server",
+      "cwd": "/ABSOLUTE/PATH/TO/cloud-flare-image-handler",
       "env": {
+        "PHOTARIUM_HTTP_ENABLED": "false",
         "PHOTARIUM_BASE_URL": "http://127.0.0.1:3000"
       }
     },
     {
       "name": "editorial",
-      "transport": "http",
-      "http_url": "http://127.0.0.1:8788",
+      "transport": "stdio",
+      "command": "/ABSOLUTE/PATH/TO/nfl-editorial/run_editorial_mcp_server.sh",
+      "cwd": "/ABSOLUTE/PATH/TO/nfl-editorial",
       "tool_prefixes": [
         "editorial_",
         "adjacency_"
-      ]
+      ],
+      "env": {
+        "EDITORIAL_HTTP_ENABLED": "false"
+      }
     },
     {
       "name": "backoffice",
-      "transport": "http",
-      "http_url": "http://127.0.0.1:8766",
+      "transport": "stdio",
+      "command": "/ABSOLUTE/PATH/TO/nfl-backoffice/.venv/bin/python",
+      "args": [
+        "mcp/mcp_backoffice_server.py"
+      ],
+      "cwd": "/ABSOLUTE/PATH/TO/nfl-backoffice",
       "tool_prefixes": [
         "backoffice_"
       ]
     },
     {
       "name": "digester",
+      "transport": "stdio",
       "command": "/ABSOLUTE/PATH/TO/Digester/.venv/bin/python",
       "args": [
         "mcp_digester_server.py"
@@ -74,6 +83,14 @@
         "digester_",
         "digest_",
         "signal_"
+      ]
+    },
+    {
+      "name": "workspace",
+      "transport": "http",
+      "http_url": "http://127.0.0.1:8777",
+      "tool_prefixes": [
+        "workspace_"
       ]
     }
   ]

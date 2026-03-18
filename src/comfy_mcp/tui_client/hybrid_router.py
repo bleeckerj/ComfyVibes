@@ -30,12 +30,12 @@ class HybridToolRouter:
             if self._http_router is not None:
                 await self._http_router.connect()
                 self._register_tools(self._http_router, source_label="http")
-        except Exception:
+        except BaseException:
             await self.close()
             raise
 
     async def close(self) -> None:
-        error: Exception | None = None
+        error: BaseException | None = None
 
         if self._http_router is not None:
             try:
@@ -65,6 +65,14 @@ class HybridToolRouter:
         if self._http_router is None:
             return []
         return await self._http_router.get_server_health_statuses()
+
+    async def get_server_connection_statuses(self) -> List[Dict[str, Any]]:
+        statuses: List[Dict[str, Any]] = []
+        if self._stdio_router is not None:
+            statuses.extend(await self._stdio_router.get_server_connection_statuses())
+        if self._http_router is not None:
+            statuses.extend(await self._http_router.get_server_connection_statuses())
+        return statuses
 
     def _register_tools(self, router: Any, *, source_label: str) -> None:
         for spec in router.list_tool_specs():

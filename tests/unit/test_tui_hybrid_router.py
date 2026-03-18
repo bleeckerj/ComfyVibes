@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from comfy_mcp.tui_client import hybrid_router as hybrid_router_module
 from comfy_mcp.tui_client.config import ServerConfig
 from comfy_mcp.tui_client.hybrid_router import HybridToolRouter
-from comfy_mcp.tui_client.mcp_router import ToolSpec
+from comfy_mcp.tui_client.mcp_router import MCPToolRouter, ToolSpec
 from comfy_mcp.tui_client.script_runner import _build_router as runner_build_router
 
 
@@ -38,6 +40,9 @@ class _FakeDelegateRouter:
         return {"router": self._response_prefix, "tool": name}
 
     async def get_server_health_statuses(self) -> list[dict]:
+        return list(self._health_statuses)
+
+    async def get_server_connection_statuses(self) -> list[dict]:
         return list(self._health_statuses)
 
 
@@ -73,6 +78,9 @@ async def test_hybrid_router_connects_and_dispatches(monkeypatch) -> None:
     statuses = await router.get_server_health_statuses()
     assert statuses == [{"name": "photarium", "ok": True}]
 
+    connection_statuses = await router.get_server_connection_statuses()
+    assert connection_statuses == [{"name": "photarium", "ok": True}]
+
     await router.close()
     assert stdio_delegate.closed is True
     assert http_delegate.closed is True
@@ -96,6 +104,30 @@ async def test_hybrid_router_rejects_duplicate_tool_names(monkeypatch) -> None:
         await router.connect()
 
 
+@pytest.mark.asyncio
+async def test_hybrid_router_closes_stdio_delegate_on_cancelled_connect(monkeypatch) -> None:
+    class _CancelledDelegate(_FakeDelegateRouter):
+        async def connect(self) -> None:
+            self.connected = True
+            raise asyncio.CancelledError()
+
+    stdio_delegate = _CancelledDelegate([], response_prefix="stdio")
+    http_delegate = _FakeDelegateRouter([], response_prefix="http")
+
+    monkeypatch.setattr(hybrid_router_module, "MCPToolRouter", lambda servers: stdio_delegate)
+    monkeypatch.setattr(hybrid_router_module, "HTTPToolRouter", lambda servers: http_delegate)
+
+    router = HybridToolRouter(
+        http_servers=[ServerConfig(name="workspace", transport="http", http_url="http://127.0.0.1:8777")],
+        stdio_servers=[ServerConfig(name="photarium", command="node", args=["dist/index.js"])],
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await router.connect()
+
+    assert stdio_delegate.closed is True
+
+
 def test_build_router_uses_hybrid_for_mixed_servers() -> None:
     servers = [
         ServerConfig(name="comfy", transport="http", http_url="http://127.0.0.1:8181"),
@@ -104,3 +136,18 @@ def test_build_router_uses_hybrid_for_mixed_servers() -> None:
     runner_router = runner_build_router(servers)
 
     assert isinstance(runner_router, HybridToolRouter)
+
+
+def test_build_router_honors_explicit_stdio_even_with_http_url() -> None:
+    servers = [
+        ServerConfig(
+            name="comfy",
+            transport="stdio",
+            command="python",
+            args=["-m", "comfy_mcp.mcp_server.cli"],
+            http_url="http://127.0.0.1:8181",
+        )
+    ]
+    runner_router = runner_build_router(servers)
+
+    assert isinstance(runner_router, MCPToolRouter)

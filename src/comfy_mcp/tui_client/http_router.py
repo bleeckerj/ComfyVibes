@@ -77,6 +77,7 @@ class HTTPToolRouter:
                     name=raw.get("name", ""),
                     description=raw.get("description", ""),
                     input_schema=raw.get("inputSchema", {}) or {},
+                    server=server.name,
                 )
 
                 # Honor per-server prefix filters from config so shared helper
@@ -95,8 +96,32 @@ class HTTPToolRouter:
             self._server_states.append(state)
 
             for spec in tools:
-                self._tool_specs.append(spec)
-                self._tool_map[spec.name] = state
+                existing_state = self._tool_map.get(spec.name)
+                if existing_state is None:
+                    self._tool_specs.append(spec)
+                    self._tool_map[spec.name] = state
+                    continue
+
+                # Avoid silent overwrite when HTTP servers expose duplicate tool
+                # names. Keep the first canonical name and auto-namespace the
+                # colliding tool so both remain callable.
+                alias_name = f"{state.name}__{spec.name}"
+                suffix = 2
+                while alias_name in self._tool_map:
+                    alias_name = f"{state.name}__{spec.name}_{suffix}"
+                    suffix += 1
+                aliased_spec = ToolSpec(
+                    name=alias_name,
+                    description=(
+                        f"[alias:{server.name}] {spec.description}".strip()
+                        if spec.description
+                        else f"[alias:{server.name}] {spec.name}"
+                    ),
+                    input_schema=spec.input_schema,
+                    server=server.name,
+                )
+                self._tool_specs.append(aliased_spec)
+                self._tool_map[alias_name] = state
 
     async def close(self) -> None:
         if self._client:
@@ -136,6 +161,13 @@ class HTTPToolRouter:
                 entry["error"] = str(exc)
             statuses.append(entry)
 
+        return statuses
+
+    async def get_server_connection_statuses(self) -> List[Dict[str, Any]]:
+        statuses = await self.get_server_health_statuses()
+        for entry in statuses:
+            if isinstance(entry, dict):
+                entry["transport"] = "http"
         return statuses
 
     async def call_tool(self, name: str, arguments: Dict[str, Any] | None) -> Any:
@@ -185,9 +217,9 @@ class HTTPToolRouter:
                                     if isinstance(text, str) and text.strip():
                                         message = text.strip()
                 raise RuntimeError(message or "Tool call failed")
-            return payload.get("result")
+            return _maybe_parse_json_text_content(payload.get("result"))
 
-        return payload
+        return _maybe_parse_json_text_content(payload)
 
     @staticmethod
     def _enrich_tool_error(name: str, arguments: Dict[str, Any] | None, message: str) -> str:
@@ -202,3 +234,34 @@ class HTTPToolRouter:
             f"{message}. Fix: call workflows_run with an explicit overrides object, "
             'for example {"workflow_id":"<id>","overrides":{...}}'
         )
+
+
+def _maybe_parse_json_text_content(result: Any) -> Any:
+    if isinstance(result, dict):
+        content = result.get("content")
+        parsed = _parse_json_from_content(content)
+        return parsed if parsed is not None else result
+    if isinstance(result, list):
+        parsed = _parse_json_from_content(result)
+        return parsed if parsed is not None else result
+    return result
+
+
+def _parse_json_from_content(content: Any) -> Any | None:
+    if not isinstance(content, list) or not content:
+        return None
+    first = content[0]
+    if not isinstance(first, dict):
+        return None
+    if first.get("type") != "text":
+        return None
+    text = first.get("text")
+    if not isinstance(text, str):
+        return None
+    candidate = text.strip()
+    if not candidate or not (candidate.startswith("{") or candidate.startswith("[")):
+        return None
+    try:
+        return json.loads(candidate)
+    except Exception:
+        return None

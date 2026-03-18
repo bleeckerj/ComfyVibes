@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from comfy_mcp.tui_client.config import ServerConfig, load_config
 from comfy_mcp.tui_client.http_router import HTTPToolRouter
 from comfy_mcp.tui_client.hybrid_router import HybridToolRouter
 from comfy_mcp.tui_client.mcp_router import MCPToolRouter
+from comfy_mcp.tui_client.transport_plan import build_transport_plan
 
 
 def _parse_args() -> argparse.Namespace:
@@ -51,13 +54,12 @@ def _parse_args() -> argparse.Namespace:
 
 def _build_router(servers: list[ServerConfig]):
     """Pick HTTP or stdio router based on server config."""
-    http_servers = [s for s in servers if s.transport == "http" or s.http_url]
-    stdio_servers = [s for s in servers if s.transport != "http" and not s.http_url]
-    if http_servers and stdio_servers:
-        return HybridToolRouter(http_servers=http_servers, stdio_servers=stdio_servers)
-    if stdio_servers:
-        return MCPToolRouter(stdio_servers)
-    return HTTPToolRouter(http_servers)
+    plan = build_transport_plan(servers)
+    if plan.http_servers and plan.stdio_servers:
+        return HybridToolRouter(http_servers=plan.http_servers, stdio_servers=plan.stdio_servers)
+    if plan.stdio_servers:
+        return MCPToolRouter(plan.stdio_servers)
+    return HTTPToolRouter(plan.http_servers)
 
 
 async def _list_tools(router: Any) -> int:
@@ -120,29 +122,61 @@ def _tool_error_text(result: Any) -> str | None:
     return "tool returned error"
 
 
+async def _call_tool_check(
+    router: Any,
+    *,
+    tool: str,
+    args: dict[str, Any],
+    timeout_s: float = 8.0,
+) -> _CheckResult:
+    try:
+        result = await asyncio.wait_for(router.call_tool(tool, args), timeout=timeout_s)
+        error = _tool_error_text(result)
+        if error:
+            return _CheckResult(ok=False, name=f"tool.{tool}", detail=error)
+        return _CheckResult(ok=True, name=f"tool.{tool}", detail="ok")
+    except asyncio.TimeoutError:
+        return _CheckResult(
+            ok=False,
+            name=f"tool.{tool}",
+            detail=f"timed out after {timeout_s:.1f}s",
+        )
+    except Exception as exc:
+        return _CheckResult(ok=False, name=f"tool.{tool}", detail=str(exc))
+
+
 async def _doctor(config_path: str) -> int:
     cfg = load_config(config_path)
     checks: list[_CheckResult] = []
 
     comfy_server = next((s for s in cfg.servers if s.name == "comfy"), None)
     if comfy_server:
-        if comfy_server.transport == "http" or comfy_server.http_url:
+        if comfy_server.transport == "http":
             base = (comfy_server.http_url or "").rstrip("/")
             if base:
                 checks.append(await _http_probe(f"{base}/health"))
         comfy_base = (comfy_server.env or {}).get("COMFY_MCP_COMFY_BASE_URL")
         if comfy_base:
             checks.append(await _http_probe(f"{comfy_base.rstrip('/')}/queue"))
+        if comfy_server.transport == "stdio":
+            checks.extend(_validate_stdio_server(comfy_server))
 
     photarium_server = next((s for s in cfg.servers if s.name == "photarium"), None)
     if photarium_server:
-        if photarium_server.transport == "http" or photarium_server.http_url:
+        if photarium_server.transport == "http":
             base = (photarium_server.http_url or "").rstrip("/")
             if base:
                 checks.append(await _http_probe(f"{base}/health"))
+        if photarium_server.transport == "stdio":
+            checks.extend(_validate_stdio_server(photarium_server))
         photarium_base = (photarium_server.env or {}).get("PHOTARIUM_BASE_URL")
         if photarium_base:
             checks.append(await _http_probe(f"{photarium_base.rstrip('/')}/api/images?limit=1"))
+
+    for server in cfg.servers:
+        if server.name == "comfy" or server.transport != "stdio":
+            continue
+        checks.extend(_validate_stdio_server(server))
 
     router = _build_router(cfg.servers)
     tool_specs = []
@@ -153,28 +187,49 @@ async def _doctor(config_path: str) -> int:
 
         tool_names = {spec.name for spec in tool_specs}
         if "comfy_queue_get" in tool_names:
-            try:
-                result = await router.call_tool("comfy_queue_get", {})
-                error = _tool_error_text(result)
-                if error:
-                    checks.append(_CheckResult(ok=False, name="tool.comfy_queue_get", detail=error))
-                else:
-                    checks.append(_CheckResult(ok=True, name="tool.comfy_queue_get", detail="ok"))
-            except Exception as exc:
-                checks.append(_CheckResult(ok=False, name="tool.comfy_queue_get", detail=str(exc)))
+            checks.append(
+                await _call_tool_check(
+                    router,
+                    tool="comfy_queue_get",
+                    args={},
+                )
+            )
 
-        if "photarium_list" in tool_names:
-            try:
-                # Force all namespaces for diagnostics so namespace defaults don't
-                # mask simple connectivity/tool issues.
-                result = await router.call_tool("photarium_list", {"limit": 1, "namespace": "__all__"})
-                error = _tool_error_text(result)
-                if error:
-                    checks.append(_CheckResult(ok=False, name="tool.photarium_list", detail=error))
-                else:
-                    checks.append(_CheckResult(ok=True, name="tool.photarium_list", detail="ok"))
-            except Exception as exc:
-                checks.append(_CheckResult(ok=False, name="tool.photarium_list", detail=str(exc)))
+        # Prefer a lightweight Photarium tool for connectivity checks.
+        # `photarium_list` can be expensive because some backends return the
+        # full catalog before local limiting.
+        if "photarium_list_namespaces" in tool_names:
+            checks.append(
+                await _call_tool_check(
+                    router,
+                    tool="photarium_list_namespaces",
+                    args={},
+                )
+            )
+        elif "photarium_vector_status" in tool_names:
+            checks.append(
+                await _call_tool_check(
+                    router,
+                    tool="photarium_vector_status",
+                    args={},
+                )
+            )
+        elif "photarium_list_folders" in tool_names:
+            checks.append(
+                await _call_tool_check(
+                    router,
+                    tool="photarium_list_folders",
+                    args={"namespace": "__all__"},
+                )
+            )
+        elif "photarium_list" in tool_names:
+            checks.append(
+                await _call_tool_check(
+                    router,
+                    tool="photarium_list",
+                    args={"limit": 1, "namespace": "__all__"},
+                )
+            )
     except Exception as exc:
         checks.append(_CheckResult(ok=False, name="mcp.connect", detail=str(exc)))
     finally:
@@ -188,9 +243,51 @@ async def _doctor(config_path: str) -> int:
         print("\nHints:")
         print("- Set ComfyUI endpoint in mcp_chat_config.json -> servers[name=comfy].env.COMFY_MCP_COMFY_BASE_URL")
         print("- Set Photarium endpoint in mcp_chat_config.json -> servers[name=photarium].env.PHOTARIUM_BASE_URL")
-        print("- Ensure those backend services are actually running before starting chat/TUI")
+        print("- Ensure HTTP-configured backend services are running before starting chat/TUI")
+        print("- Ensure stdio-configured servers have a valid command and cwd in mcp_chat_config.json")
         return 1
     return 0
+
+
+def _validate_stdio_server(server: ServerConfig) -> list[_CheckResult]:
+    checks: list[_CheckResult] = []
+    command = server.command.strip()
+    if not command:
+        checks.append(
+            _CheckResult(
+                ok=False,
+                name=f"stdio.{server.name}.command",
+                detail="missing command",
+            )
+        )
+    elif os.path.isabs(command):
+        checks.append(
+            _CheckResult(
+                ok=Path(command).exists(),
+                name=f"stdio.{server.name}.command",
+                detail=command if Path(command).exists() else f"{command} not found",
+            )
+        )
+    else:
+        resolved = shutil.which(command)
+        checks.append(
+            _CheckResult(
+                ok=resolved is not None,
+                name=f"stdio.{server.name}.command",
+                detail=resolved or f"{command} not on PATH",
+            )
+        )
+
+    if server.cwd:
+        cwd_path = Path(server.cwd)
+        checks.append(
+            _CheckResult(
+                ok=cwd_path.is_dir(),
+                name=f"stdio.{server.name}.cwd",
+                detail=str(cwd_path) if cwd_path.is_dir() else f"{cwd_path} missing",
+            )
+        )
+    return checks
 
 
 async def _call_tool(router: Any, tool: str, raw_args: str) -> int:

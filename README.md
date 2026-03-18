@@ -227,6 +227,30 @@ Run multi-step jobs from JSON:
 - MCP server startup and tool listing
 - Basic smoke tool calls (`comfy_queue_get`, `photarium_list`)
 
+### Digest->Signal Extraction Manager
+
+For deterministic Digester signal extraction operations (status, latest runs,
+unprocessed/backfill runs, and images backfill), use:
+
+```bash
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py status
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-latest --days 2
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-unprocessed
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-backfill --days 365
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-digest --digest digests/2026/03/03082026_105127_digest-this.json
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py images-backfill --days 30
+```
+
+Optional near-real-time mode after ingestion:
+
+```bash
+/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py watch --days 1 --poll-seconds 120
+```
+
+`status --json` now also includes `orphan_signals` so you can audit loose
+signal files that no longer map to a digest. Use `extract-digest` as the
+ingestion hook target to enforce per-digest extraction and verification.
+
 Minimal config example:
 
 ```json
@@ -251,6 +275,34 @@ Minimal config example:
 ```
 
 If you see `LLM request timed out`, increase `llm.timeout_s` (for example `180` or `300`).
+
+### Run A Workflow From An Existing Image
+
+Use `workflows_run_from_source` when you want to start from an image itself instead of naming a workflow up front. The tool can resolve a Photarium image id, URL, or local file path, recover the embedded workflow or reuse a cached lineage package, and then either run immediately or return `needs_input` with a resumable token for missing image bindings.
+
+Docs:
+
+- [Workflow Run From Source / Lineage Cache](docs/workflows_run_from_source.README.md)
+- [TUI README](docs/TUI_README.md)
+
+Deterministic tool-runner example:
+
+```bash
+./run_mcp_tools.sh call \
+  --tool workflows_run_from_source \
+  --args '{
+    "source":"75e92a7e-2838-45a7-6f2c-32a5fde6c300",
+    "source_kind":"photarium_id",
+    "namespace":"cf-default",
+    "overrides":{"denoise":0.7}
+  }'
+```
+
+TUI examples:
+
+- `Run the workflow embedded in Photarium image 75e92a7e-2838-45a7-6f2c-32a5fde6c300.`
+- `Run the workflow from /tmp/ComfyUI_01065.png and keep the same prompt but change denoise to 0.65.`
+- `Rerun the workflow that made image b287f5ef-2901-4e27-f6b4-b483fc4a7e00.`
 
 ### Extract a Workflow from an Artifact
 
@@ -373,6 +425,9 @@ ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interact
 | `workflows_extract_from_photarium` | Extract a workflow for a Photarium image id, falling back to downloading the original artifact when derived JPEG variants lack embedded metadata. |
 | `workflows_import_from_artifact` | Extract a workflow from an artifact and save it directly to the workflow store with name, tags, and metadata. |
 | `workflows_import_from_photarium` | Pull a Photarium image workflow and save it to the workflow corpus (falls back to Photarium extras or original artifact download when needed). |
+| `workflows_run_from_source` | Resolve a Photarium id, URL, or local file path, recover the embedded workflow or lineage cache, and run it. Returns `needs_input` with a resumable token when required image bindings are missing. |
+| `workflows_lineage_register_results` | Attach uploaded Photarium result image ids to a runtime lineage record so later requests can reuse the cached packaged workflow by result id. |
+| `workflows_lineage_get` | Inspect one runtime lineage record by `lineage_run_id` or by resolving a source/result image id through the lineage indexes. |
 | `workflows_run_aspect_ratio_adjustment` | Upload an image, set aspect ratio, and run the aspect ratio adjustment workflow. Supports positive/negative prompts, seed, and output naming. |
 
 ---

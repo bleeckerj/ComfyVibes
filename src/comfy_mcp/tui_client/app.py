@@ -11,78 +11,85 @@ import re
 import secrets
 import subprocess
 import shutil
+import sys
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal
 
 from rich.markup import escape as rich_markup_escape
-from textual.app import App, ComposeResult
-from textual import events
-from textual.driver import Driver
-from textual.widgets import Footer, Header, RichLog, TextArea
+_TEXTUAL_AVAILABLE = True
+try:
+    from textual.app import App, ComposeResult
+    from textual import events
+    from textual.driver import Driver
+    from textual.widgets import Footer, Header, RichLog, TextArea
+except ModuleNotFoundError:  # pragma: no cover - optional dependency for non-TUI unit tests
+    # The TUI depends on Textual, but most of our orchestration logic and unit tests do not.
+    # Provide minimal stubs so importing this module doesn't hard-require Textual.
+    from types import SimpleNamespace
 
-from comfy_mcp.tui_client.config import DEFAULT_SYSTEM_PROMPT, ChatClientConfig, load_config
+    _TEXTUAL_AVAILABLE = False
+
+    class App:  # type: ignore[override]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def notify(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def query_one(self, *args: Any, **kwargs: Any) -> Any:
+            raise LookupError("Textual is not installed; query_one() is unavailable.")
+
+    class ComposeResult:  # type: ignore[override]
+        pass
+
+    class Driver:  # type: ignore[override]
+        pass
+
+    class _WidgetStub:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    events = SimpleNamespace()  # type: ignore[assignment]
+    Footer = Header = RichLog = TextArea = _WidgetStub  # type: ignore[misc]
+
+from comfy_mcp.tui_client.config import (
+    DEFAULT_SYSTEM_PROMPT,
+    ChatClientConfig,
+    ResponseVerbosity,
+    compose_runtime_system_prompt,
+    load_config,
+)
 from comfy_mcp.tui_client.llm_client import OpenAIClient
 from comfy_mcp.tui_client.orchestrator import ChatOrchestrator
-from comfy_mcp.tui_client.mcp_router import MCPToolRouter
+from comfy_mcp.tui_client.mcp_router import MCPToolRouter, _is_ignorable_stdio_close_error
 from comfy_mcp.tui_client.http_router import HTTPToolRouter
 from comfy_mcp.tui_client.hybrid_router import HybridToolRouter
 from comfy_mcp.tui_client.sanitize import sanitize_result
 from comfy_mcp.tui_client.workflows_schema import ensure_workflows_run_schema
+from comfy_mcp.tui_client.app_support import (
+    build_router as _build_router,
+    clipboard_copy as _clipboard_copy,
+    normalize_openai_tool_schema as _normalize_openai_tool_schema,
+    strip_border_glyphs as _strip_border_glyphs,
+)
+from comfy_mcp.tui_client.commands import LocalCommandHandler
+from comfy_mcp.tui_client.flow_prompts import FlowPromptBuilder
+from comfy_mcp.tui_client.session_logging import SessionLogManager
+
+from comfy_mcp.tui_client.startup_diagnostics import StartupDiagnosticsRenderer
+
+if _TEXTUAL_AVAILABLE:  # pragma: no cover - import depends on optional dependency
+    from comfy_mcp.tui_client.widgets import HistoryTextArea, PassiveRichLog
+else:  # pragma: no cover - test fallback when Textual isn't installed
+    HistoryTextArea = TextArea  # type: ignore[assignment]
+    PassiveRichLog = RichLog  # type: ignore[assignment]
 
 try:
     from textual.drivers.linux_driver import LinuxDriver as _TextualLinuxDriver
 except Exception:  # pragma: no cover - platform/import dependent
     _TextualLinuxDriver = None
-
-
-class HistoryTextArea(TextArea):
-    """TextArea with shell-style history traversal on Up/Down at boundaries."""
-
-    def __init__(
-        self,
-        *args: Any,
-        on_history_prev: Callable[[], None] | None = None,
-        on_history_next: Callable[[], None] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self._on_history_prev = on_history_prev
-        self._on_history_next = on_history_next
-
-    def action_cursor_up(self) -> None:
-        row, _ = self.cursor_location
-        if row == 0 and self._on_history_prev is not None:
-            self._on_history_prev()
-            return
-        super().action_cursor_up()
-
-    def action_cursor_down(self) -> None:
-        row, _ = self.cursor_location
-        last_row = max(0, self.document.line_count - 1)
-        if row >= last_row and self._on_history_next is not None:
-            self._on_history_next()
-            return
-        super().action_cursor_down()
-
-    async def _on_key(self, event: events.Key) -> None:
-        logger = getattr(self.app, "_key_debug_write", None)
-        if callable(logger) and bool(getattr(self.app, "_key_debug_enabled", False)):
-            logger(
-                "input_key",
-                key=event.key,
-                name=event.name,
-                character=event.character,
-                is_printable=bool(getattr(event, "is_printable", False)),
-                is_repeat=getattr(event, "is_repeat", None),
-            )
-        await super()._on_key(event)
-
-class PassiveRichLog(RichLog):
-    """Log pane that won't steal keyboard focus from the input composer."""
-
-    can_focus = False
-
 
 def _should_disable_kitty_keyboard_protocol() -> bool:
     """Work around iTerm2 + Textual keyboard repeat issues by skipping kitty keyboard mode."""
@@ -107,122 +114,6 @@ if _TextualLinuxDriver is not None:
 else:  # pragma: no cover - fallback on unsupported platforms
     _EDGARLinuxDriver = None
 
-
-def _clipboard_copy(text: str) -> bool:
-    """Copy text to system clipboard. Returns True on success."""
-    system = platform.system()
-    if system == "Darwin" and shutil.which("pbcopy"):
-        cmd = ["pbcopy"]
-    elif system == "Linux" and shutil.which("xclip"):
-        cmd = ["xclip", "-selection", "clipboard"]
-    elif system == "Linux" and shutil.which("xsel"):
-        cmd = ["xsel", "--clipboard", "--input"]
-    elif system == "Linux" and shutil.which("wl-copy"):
-        cmd = ["wl-copy"]
-    elif shutil.which("clip.exe"):  # WSL
-        cmd = ["clip.exe"]
-    else:
-        return False
-    try:
-        subprocess.run(cmd, input=text.encode("utf-8"), check=True, timeout=5)
-        return True
-    except Exception:
-        return False
-
-
-def _strip_border_glyphs(text: str) -> str:
-    """Strip common Textual border glyphs from copied text lines."""
-    cleaned_lines: List[str] = []
-    for raw_line in text.splitlines():
-        line = re.sub(r"^\s*[│┃║]\s?", "", raw_line.rstrip())
-        line = re.sub(r"\s*[▁▂▃▄▅▆▇█]?\s*[│┃║]\s*[▁▂▃▄▅▆▇█]?$", "", line)
-        cleaned_lines.append(line)
-    return "\n".join(cleaned_lines)
-
-
-def _normalize_openai_tool_schema(schema: Any) -> Dict[str, Any]:
-    """Normalize MCP-provided JSON schema into OpenAI-compatible function parameters."""
-
-    def _includes_type(node_type: Any, expected: str) -> bool:
-        if isinstance(node_type, str):
-            return node_type == expected
-        if isinstance(node_type, list):
-            return expected in node_type
-        return False
-
-    def _normalize_node(node: Any) -> Any:
-        if not isinstance(node, dict):
-            return node
-
-        normalized: Dict[str, Any] = {}
-        for key, value in node.items():
-            if key in {"properties", "$defs", "definitions", "patternProperties", "dependentSchemas"}:
-                if isinstance(value, dict):
-                    normalized[key] = {
-                        str(child_key): _normalize_node(child_value)
-                        for child_key, child_value in value.items()
-                    }
-                else:
-                    normalized[key] = {}
-                continue
-
-            if key in {"allOf", "anyOf", "oneOf", "prefixItems"}:
-                if isinstance(value, list):
-                    normalized[key] = [
-                        _normalize_node(entry) if isinstance(entry, dict) else {}
-                        for entry in value
-                    ]
-                continue
-
-            if key in {"items", "contains", "if", "then", "else", "not", "propertyNames"}:
-                if isinstance(value, dict):
-                    normalized[key] = _normalize_node(value)
-                elif key == "items" and isinstance(value, list):
-                    normalized[key] = [
-                        _normalize_node(entry) if isinstance(entry, dict) else {}
-                        for entry in value
-                    ]
-                continue
-
-            if key in {"additionalProperties", "unevaluatedProperties"}:
-                if isinstance(value, bool):
-                    normalized[key] = value
-                elif isinstance(value, dict):
-                    normalized[key] = _normalize_node(value)
-                continue
-
-            if key == "unevaluatedItems":
-                if isinstance(value, bool):
-                    normalized[key] = value
-                elif isinstance(value, dict):
-                    normalized[key] = _normalize_node(value)
-                continue
-
-            if key == "required":
-                if isinstance(value, list):
-                    normalized[key] = [item for item in value if isinstance(item, str)]
-                continue
-
-            normalized[key] = value
-
-        node_type = normalized.get("type")
-        is_object = _includes_type(node_type, "object")
-        is_array = _includes_type(node_type, "array")
-
-        if is_object and "properties" in normalized and not isinstance(normalized.get("properties"), dict):
-            normalized["properties"] = {}
-
-        if is_array and "items" not in normalized:
-            normalized["items"] = {}
-
-        return normalized
-
-    if not isinstance(schema, dict):
-        return {"type": "object", "properties": {}}
-    normalized_schema = _normalize_node(schema)
-    if not isinstance(normalized_schema, dict):
-        return {"type": "object", "properties": {}}
-    return normalized_schema
 
 
 def _format_editorial_ads_inventory_lines(result: Any) -> List[str] | None:
@@ -321,16 +212,111 @@ def _format_editorial_ads_preview_lines(result: Any) -> List[str] | None:
     return lines
 
 
-def _build_router(config: ChatClientConfig):
-    """Pick HTTP or stdio router based on server config."""
-    http_servers = [s for s in config.servers if s.transport == "http" or s.http_url]
-    stdio_servers = [s for s in config.servers if s.transport != "http" and not s.http_url]
-    if http_servers and stdio_servers:
-        return HybridToolRouter(http_servers=http_servers, stdio_servers=stdio_servers)
-    if stdio_servers:
-        return MCPToolRouter(stdio_servers)
-    # All servers are HTTP — use the lightweight HTTP router
-    return HTTPToolRouter(http_servers)
+_RECENT_SIGNAL_TERMS_RE = re.compile(r"\b(last|latest|most\s+recent|newest)\b", re.IGNORECASE)
+_SIGNAL_TOKEN_RE = re.compile(r"\bsign[a-z]*\b", re.IGNORECASE)
+
+
+def _parse_recent_signal_request_count(user_text: str, number_words: Dict[str, int]) -> int | None:
+    text = (user_text or "").strip().lower()
+    if not text or "digest" in text:
+        return None
+    if not _RECENT_SIGNAL_TERMS_RE.search(text):
+        return None
+    if not _SIGNAL_TOKEN_RE.search(text):
+        return None
+
+    for match in re.finditer(
+        r"\b(last|latest|most\s+recent|newest)\s+([a-z]+|\d{1,3})\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        raw = match.group(2).lower()
+        if raw.isdigit():
+            return max(1, min(int(raw), 25))
+        if raw in number_words:
+            return max(1, min(int(number_words[raw]), 25))
+
+    for match in re.finditer(r"\b(\d{1,3})\s+sign[a-z]*\b", text, flags=re.IGNORECASE):
+        return max(1, min(int(match.group(1)), 25))
+
+    if re.search(r"\blast\s+signal\b", text, flags=re.IGNORECASE):
+        return 1
+    return 3
+
+
+def _extract_signal_items_from_tool_result(result: Any) -> List[Dict[str, Any]] | None:
+    visited: set[int] = set()
+    queue: list[Any] = [result]
+
+    while queue:
+        current = queue.pop(0)
+        current_id = id(current)
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+
+        if isinstance(current, dict):
+            for key in ("items", "signals", "results", "matches", "queue"):
+                value = current.get(key)
+                if isinstance(value, list):
+                    items = [item for item in value if isinstance(item, dict)]
+                    if items:
+                        return items
+
+            content = current.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    text = block.get("text")
+                    if isinstance(text, str) and text.strip():
+                        queue.append(text)
+
+            for key in ("data", "result", "payload"):
+                nested = current.get(key)
+                if nested is not None:
+                    queue.append(nested)
+            continue
+
+        if isinstance(current, str):
+            raw = current.strip()
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                continue
+            queue.append(parsed)
+
+    return None
+
+
+def _format_recent_signal_lines(items: List[Dict[str, Any]], requested_count: int) -> List[str]:
+    lines: List[str] = []
+    selected = items[:requested_count]
+    for index, signal in enumerate(selected, start=1):
+        signal_id = str(signal.get("signal_id") or "unknown")
+        headline = str(signal.get("headline") or "Untitled Signal").strip()
+        summary = (
+            signal.get("hook_preview")
+            or signal.get("hook")
+            or signal.get("summary")
+            or signal.get("gpt_summary")
+            or signal.get("gpt_logline_summary")
+            or signal.get("digest_summary")
+            or signal.get("novelty_note")
+            or "(no summary provided)"
+        )
+        summary_text = str(summary).strip()
+        if len(summary_text) > 260:
+            summary_text = summary_text[:257].rstrip() + "..."
+        lines.append(f"{index}) {signal_id} — {headline} — {summary_text}")
+
+    if len(selected) < requested_count:
+        lines.append(
+            f"Tool returned {len(selected)} signal(s), fewer than requested ({requested_count})."
+        )
+    return lines
 
 
 class ChatApp(App):
@@ -459,8 +445,14 @@ class ChatApp(App):
     def __init__(self, config: ChatClientConfig):
         super().__init__()
         self._config = config
-        self._router = _build_router(config)
+        self._all_servers = list(config.servers)
+        self._server_enabled = {server.name: True for server in self._all_servers}
+        self._router = _build_router(self._build_active_config())
         self._llm = OpenAIClient(config.llm)
+        self._startup_diagnostics = StartupDiagnosticsRenderer()
+        self._command_handler = LocalCommandHandler()
+        self._flow_prompt_builder = FlowPromptBuilder(self._NUMBER_WORDS)
+        self._session_log_manager = SessionLogManager()
         self._tools: List[Dict[str, Any]] = []
         self._available_tool_names: set[str] = set()
         self._orchestrator = ChatOrchestrator(
@@ -481,18 +473,36 @@ class ChatApp(App):
         self._request_queue: asyncio.Queue[str] = asyncio.Queue()
         self._request_queue_worker_running = False
         self._request_inflight = 0
+        self._reconnect_lock = asyncio.Lock()
         self._turn_state: Literal["IDLE", "RUNNING_LLM", "RUNNING_TOOLS"] = "IDLE"
         self._chat_log_widget: RichLog | None = None
         self._tool_log_widget: RichLog | None = None
         self._session_log_buffer: List[str] = []
         self._session_log_flush_handle: asyncio.Handle | None = None
+        self._base_system_prompt = config.system_prompt or DEFAULT_SYSTEM_PROMPT
+        self._response_verbosity: ResponseVerbosity = "lowkey"
         low_churn_raw = os.environ.get("EDGAR_TUI_LOW_CHURN", "1").strip().lower()
         self._low_churn_mode = low_churn_raw not in {"0", "false", "no", "off"}
         self._ui_prefs_path = Path.cwd() / self._UI_PREFS_FILENAME
         self._input_height_lines: int = self._DEFAULT_INPUT_HEIGHT
         self._key_debug_enabled = os.environ.get("EDGAR_TUI_KEY_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
         self._key_debug_log_path = Path.cwd() / ".mcp_chat_logs" / "edgar_key_debug.jsonl"
-        self._load_ui_preferences()
+        self._previous_loop_exception_handler: Callable[[asyncio.AbstractEventLoop, Dict[str, Any]], None] | None = None
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            self._load_ui_preferences()
+        self._router = _build_router(self._build_active_config())
+        self._orchestrator.set_router(self._router)
+        self._apply_runtime_system_prompt()
+
+    def _build_active_config(self) -> ChatClientConfig:
+        active_servers = [server for server in self._all_servers if self._server_enabled.get(server.name, True)]
+        return ChatClientConfig(
+            llm=self._config.llm,
+            servers=active_servers,
+            system_prompt=self._config.system_prompt,
+            strict_tool_facts=self._config.strict_tool_facts,
+            tool_description_hints=self._config.tool_description_hints,
+        )
 
     def get_driver_class(self) -> type[Driver]:
         driver_class = super().get_driver_class()
@@ -535,6 +545,7 @@ class ChatApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self._install_loop_exception_handler()
         self._init_session_log()
         self._chat_log_widget = self.query_one("#chat_log", RichLog)
         self._tool_log_widget = self.query_one("#tool_log", RichLog)
@@ -580,6 +591,22 @@ class ChatApp(App):
             # Debug logging must never impact input handling.
             return
 
+    def _install_loop_exception_handler(self) -> None:
+        loop = asyncio.get_running_loop()
+        if self._previous_loop_exception_handler is not None:
+            return
+        self._previous_loop_exception_handler = loop.get_exception_handler()
+
+        def _handler(inner_loop: asyncio.AbstractEventLoop, context: Dict[str, Any]) -> None:
+            if _is_known_stdio_asyncgen_shutdown_context(context):
+                return
+            if self._previous_loop_exception_handler is not None:
+                self._previous_loop_exception_handler(inner_loop, context)
+                return
+            inner_loop.default_exception_handler(context)
+
+        loop.set_exception_handler(_handler)
+
     async def _startup(self) -> None:
         self._render_startup_banner()
         self._write_chat("[bold]Connecting to MCP servers...[/bold]", "Connecting to MCP servers...")
@@ -588,7 +615,7 @@ class ChatApp(App):
         except Exception as exc:
             self._write_chat(f"[red]Failed to connect: {exc}[/red]", f"Failed to connect: {exc}")
             return
-        await self._render_connected_servers()
+        await self._startup_diagnostics.render_connected_servers(self)
 
         self._tools = [self._to_openai_tool(spec) for spec in self._router.list_tool_specs()]
         self._available_tool_names = {
@@ -600,7 +627,7 @@ class ChatApp(App):
         self._write_tools("[bold]Tools ready:[/bold]", "Tools ready:")
         for tool in self._tools:
             self._write_tools(f"- {tool['function']['name']}", f"- {tool['function']['name']}")
-        await self._render_comfy_server_info()
+        await self._startup_diagnostics.render_comfy_server_info(self)
         self._is_ready = True
         self._write_chat("[green]Ready. Type a request below.[/green]", "Ready. Type a request below.")
         self._write_chat(
@@ -608,121 +635,101 @@ class ChatApp(App):
             "Tip: Opt+Left/Right moves by word. Ctrl+Shift+Up/Down resizes the input box.",
         )
 
-    async def _render_connected_servers(self) -> None:
-        health_fetcher = getattr(self._router, "get_server_health_statuses", None)
-        if not callable(health_fetcher):
-            return
-        try:
-            statuses = await health_fetcher()
-        except Exception as exc:
-            self._write_chat(
-                f"[yellow]Connected, but failed to read server health details: {exc}[/yellow]",
-                f"Connected, but failed to read server health details: {exc}",
-            )
-            return
-        if not isinstance(statuses, list) or not statuses:
-            return
+    async def _reconnect_tools(self, *, allow_when_busy: bool = False) -> bool:
+        async with self._reconnect_lock:
+            if not allow_when_busy and self._turn_state != "IDLE":
+                self._write_chat(
+                    "[yellow]Busy. Wait for the current request to finish, then try again.[/yellow]",
+                    "Busy. Wait for the current request to finish, then try again.",
+                )
+                return False
 
-        self._write_chat("[bold]Connected servers:[/bold]", "Connected servers:")
-        for status in statuses:
-            if not isinstance(status, dict):
-                continue
-            name = str(status.get("name") or "unknown")
-            base_url = str(status.get("base_url") or "")
-            ok = bool(status.get("ok"))
-            payload = status.get("payload")
-            payload_dict = payload if isinstance(payload, dict) else {}
-            runtime_status = str(payload_dict.get("status") or ("ok" if ok else "unknown"))
-            version = payload_dict.get("service_version")
-            commit = payload_dict.get("git_commit")
-            branch = payload_dict.get("git_branch")
-            dirty = payload_dict.get("git_dirty")
-            detail_parts: list[str] = [f"status={runtime_status}"]
-            if isinstance(version, str) and version:
-                detail_parts.append(f"version={version}")
-            if isinstance(commit, str) and commit:
-                detail_parts.append(f"commit={commit}")
-            if isinstance(branch, str) and branch:
-                detail_parts.append(f"branch={branch}")
-            if isinstance(dirty, bool):
-                detail_parts.append(f"dirty={'yes' if dirty else 'no'}")
-            details = ", ".join(detail_parts)
-            plain = f"- {name} ({base_url}) {details}"
-            self._write_chat(f"[dim]{plain}[/dim]", plain)
+            self._is_ready = False
+            self._write_chat("[bold]Reconnecting MCP tools...[/bold]", "Reconnecting MCP tools...")
+            old_router = self._router
+            new_router = _build_router(self._build_active_config())
+            try:
+                await new_router.connect()
+            except Exception as exc:
+                try:
+                    await new_router.close()
+                except Exception:
+                    pass
+                self._is_ready = True
+                self._write_chat(f"[red]Reconnect failed: {exc}[/red]", f"Reconnect failed: {exc}")
+                return False
+
+            try:
+                await old_router.close()
+            except Exception:
+                pass
+
+            self._router = new_router
+            self._orchestrator.set_router(self._router)
+            self._tools = [self._to_openai_tool(spec) for spec in self._router.list_tool_specs()]
+            self._available_tool_names = {
+                str(tool.get("function", {}).get("name", ""))
+                for tool in self._tools
+                if isinstance(tool, dict)
+            }
+            self._orchestrator.set_tools(self._tools)
+            self._orchestrator.reset_conversation()
+            self._apply_runtime_system_prompt()
+            await self._startup_diagnostics.render_connected_servers(self)
+            self._is_ready = True
+            self._write_chat("[green]Tools updated.[/green]", "Tools updated.")
+            return True
+
+    def _resolve_server_token(self, token: str) -> str | None:
+        lowered = token.strip().lower()
+        if not lowered:
+            return None
+        alias_map = {
+            "workflows": "comfy",
+            "workflow": "comfy",
+            "wf": "comfy",
+        }
+        lowered = alias_map.get(lowered, lowered)
+        for server in self._all_servers:
+            if server.name.lower() == lowered:
+                return server.name
+        return None
+
+    def _set_server_enabled(self, name: str, enabled: bool) -> bool:
+        if name not in self._server_enabled:
+            return False
+        self._server_enabled[name] = enabled
+        self._save_ui_preferences()
+        return True
+
+    def _show_tool_state(self) -> None:
+        self._write_chat("[bold]Tool state (servers)[/bold]", "Tool state (servers)")
+        tool_count_by_server: dict[str, int] = {}
+        if self._is_ready:
+            for spec in self._router.list_tool_specs():
+                server_name = getattr(spec, "server", "") or ""
+                tool_count_by_server[server_name] = tool_count_by_server.get(server_name, 0) + 1
+        for server in self._all_servers:
+            enabled = self._server_enabled.get(server.name, True)
+            state_markup = "[green]ON[/green]" if enabled else "[red]OFF[/red]"
+            state_plain = "ON" if enabled else "OFF"
+            prefixes = ", ".join(server.tool_prefixes) if server.tool_prefixes else "(no prefixes)"
+            tool_count = tool_count_by_server.get(server.name, 0) if self._is_ready and enabled else 0
+            self._write_chat(
+                f"- {state_markup} [bold]{server.name}[/bold] [dim]tools:[/dim] {tool_count} [dim]prefixes:[/dim] {prefixes}",
+                f"- {state_plain} {server.name} tools: {tool_count} prefixes: {prefixes}",
+            )
+        if self._is_ready:
+            self._write_chat(
+                f"[dim]Active tools: {len(self._available_tool_names)} (LLM max per request: {self._orchestrator._MAX_TOOLS_PER_LLM_REQUEST}).[/dim]",
+                f"Active tools: {len(self._available_tool_names)} (LLM max per request: {self._orchestrator._MAX_TOOLS_PER_LLM_REQUEST}).",
+            )
+
+    async def _render_connected_servers(self) -> None:
+        await self._startup_diagnostics.render_connected_servers(self)
 
     async def _render_comfy_server_info(self) -> None:
-        if "comfy_server_info" not in self._available_tool_names:
-            return
-        call_tool = getattr(self._router, "call_tool", None)
-        if not callable(call_tool):
-            return
-
-        try:
-            payload = await asyncio.wait_for(call_tool("comfy_server_info", {}), timeout=8.0)
-        except Exception as exc:
-            self._write_chat(
-                f"[yellow]Comfy server-info diagnostics failed: {exc}[/yellow]",
-                f"Comfy server-info diagnostics failed: {exc}",
-            )
-            return
-        if not isinstance(payload, dict):
-            self._write_chat(
-                "[yellow]Comfy server-info diagnostics returned a non-object payload.[/yellow]",
-                "Comfy server-info diagnostics returned a non-object payload.",
-            )
-            return
-
-        base_url = str(payload.get("configured_base_url") or "").strip()
-        target = payload.get("target")
-        target_dict = target if isinstance(target, dict) else {}
-        host = str(target_dict.get("host") or "")
-        port = target_dict.get("port")
-        resolved_ips = target_dict.get("resolved_ips")
-        resolved_ip_list = [str(item) for item in resolved_ips] if isinstance(resolved_ips, list) else []
-        dns_error = str(target_dict.get("dns_error") or "").strip()
-        probe = payload.get("probe")
-        probe_dict = probe if isinstance(probe, dict) else {}
-
-        self._write_chat("[bold]Comfy server-info:[/bold]", "Comfy server-info:")
-        target_line = f"- configured_base_url={base_url or '<empty>'}"
-        if host:
-            target_line += f", host={host}"
-        if isinstance(port, int):
-            target_line += f", port={port}"
-        self._write_chat(f"[dim]{target_line}[/dim]", target_line)
-
-        if resolved_ip_list:
-            ips_line = f"- resolved_ips={', '.join(resolved_ip_list)}"
-            self._write_chat(f"[dim]{ips_line}[/dim]", ips_line)
-        elif dns_error:
-            dns_line = f"- dns_error={dns_error}"
-            self._write_chat(f"[yellow]{dns_line}[/yellow]", dns_line)
-        else:
-            self._write_chat("[dim]- resolved_ips=<none>[/dim]", "- resolved_ips=<none>")
-
-        if probe_dict:
-            endpoint = str(probe_dict.get("endpoint") or "")
-            latency_ms = probe_dict.get("latency_ms")
-            probe_ok = bool(probe_dict.get("ok"))
-            if probe_ok:
-                running = probe_dict.get("queue_running_count")
-                pending = probe_dict.get("queue_pending_count")
-                parts = [f"- probe_ok=true", f"endpoint={endpoint}"]
-                if isinstance(latency_ms, (int, float)):
-                    parts.append(f"latency_ms={latency_ms}")
-                if isinstance(running, int):
-                    parts.append(f"queue_running={running}")
-                if isinstance(pending, int):
-                    parts.append(f"queue_pending={pending}")
-                line = ", ".join(parts)
-                self._write_chat(f"[green]{line}[/green]", line)
-            else:
-                probe_error = str(probe_dict.get("error") or "unknown error")
-                parts = [f"- probe_ok=false", f"endpoint={endpoint}", f"error={probe_error}"]
-                if isinstance(latency_ms, (int, float)):
-                    parts.append(f"latency_ms={latency_ms}")
-                line = ", ".join(parts)
-                self._write_chat(f"[yellow]{line}[/yellow]", line)
+        await self._startup_diagnostics.render_comfy_server_info(self)
 
     def _render_startup_banner(self) -> None:
         for line in self._EDGAR_ASCII:
@@ -794,994 +801,76 @@ class ChatApp(App):
                 self.run_worker(self._drain_request_queue(), exclusive=False)
 
     def _handle_local_command(self, user_text: str) -> bool:
-        command = user_text.strip().lower()
-        command_name = command.split(maxsplit=1)[0] if command else ""
-        if command_name == "/reset":
-            self._reset_conversation()
-            return True
-        if command_name == "/help":
-            self._show_help()
-            return True
-        if command_name == "/status":
-            self._show_status()
-            return True
-        if command_name in {"/aspect", "/ar", "/aspectratio"}:
-            self._run_aspect_flow(user_text)
-            return True
-        if command_name in {"/importwf", "/importworkflow"}:
-            self._run_import_workflow_flow(user_text)
-            return True
-        if command_name in {"/imageedit", "/imgedit", "/editimg"}:
-            self._run_imageedit_flow(user_text)
-            return True
-        if command_name in {"/vary", "/variation", "/variations"}:
-            self._run_variation_flow(user_text)
-            return True
-        if command_name == "/moodboard":
-            self._run_moodboard_flow(user_text)
-            return True
-        if command_name in {"/tanktracks", "/tanktrack"}:
-            self._run_tanktracks_flow(user_text)
-            return True
-        return False
+        return self._command_handler.handle(self, user_text)
 
     def _show_help(self) -> None:
-        self._write_chat("[bold]Local commands:[/bold]", "Local commands:")
-        self._write_chat("- [cyan]/help[/cyan] show available local commands", "- /help show available local commands")
-        self._write_chat("- [cyan]/status[/cyan] show current TUI session status", "- /status show current TUI session status")
-        self._write_chat("- [cyan]/reset[/cyan] clear chat/tools and reset LLM context", "- /reset clear chat/tools and reset LLM context")
-        self._write_chat(
-            "- [cyan]/moodboard <brief>[/cyan] run an agentic mood-board flow",
-            "- /moodboard <brief> run an agentic mood-board flow",
-        )
-        self._write_chat(
-            "- [cyan]/aspect <image_id> targets=...[/cyan] (aliases: [cyan]/ar[/cyan], [cyan]/aspectratio[/cyan]) run source-anchored aspect-ratio flow",
-            "- /aspect <image_id> targets=... (aliases: /ar, /aspectratio) run source-anchored aspect-ratio flow",
-        )
-        self._write_chat(
-            "- [cyan]/importwf <image_id> [id=workflow_id][/cyan] (alias: [cyan]/importworkflow[/cyan]) import embedded Photarium workflow into catalog",
-            "- /importwf <image_id> [id=workflow_id] (alias: /importworkflow) import embedded Photarium workflow into catalog",
-        )
-        self._write_chat(
-            "- [cyan]/tanktracks|/tanktrack <image_id>[/cyan] run the add-tank-tracks variant flow",
-            "- /tanktracks|/tanktrack <image_id> run the add-tank-tracks variant flow",
-        )
-        self._write_chat(
-            "- [cyan]/imageedit <image_id> <edit request>[/cyan] run a flexible image-edit workflow flow",
-            "- /imageedit <image_id> <edit request> run a flexible image-edit workflow flow",
-        )
-        self._write_chat(
-            "- [cyan]/vary <image_id>[/cyan] run the image-variation flow",
-            "- /vary <image_id> run the image-variation flow",
-        )
-        self._write_chat("[bold]Keyboard shortcuts:[/bold]", "Keyboard shortcuts:")
-        self._write_chat("- [cyan]F1 / F2[/cyan] focus Chat / Tools pane", "- F1 / F2 focus Chat / Tools pane")
-        self._write_chat(
-            "- [cyan]Alt+Up / Alt+Down[/cyan] scroll active pane",
-            "- Alt+Up / Alt+Down scroll active pane",
-        )
-        self._write_chat(
-            "- [cyan]Alt+Shift+Up / Alt+Shift+Down[/cyan] page active pane",
-            "- Alt+Shift+Up / Alt+Shift+Down page active pane",
-        )
-        self._write_chat(
-            "- [cyan]Cmd+Up / Cmd+Down[/cyan] jump to top / bottom of active pane",
-            "- Cmd+Up / Cmd+Down jump to top / bottom of active pane",
-        )
-        self._write_chat("- [cyan]Opt+Left / Opt+Right[/cyan] move cursor by word", "- Opt+Left / Opt+Right move cursor by word")
-        self._write_chat(
-            "- [cyan]Opt+Backspace / Opt+D[/cyan] delete previous / next word",
-            "- Opt+Backspace / Opt+D delete previous / next word",
-        )
-        self._write_chat(
-            "- [cyan]Ctrl+Shift+Up / Ctrl+Shift+Down[/cyan] increase/decrease input height",
-            "- Ctrl+Shift+Up / Ctrl+Shift+Down increase/decrease input height",
-        )
-        self._write_chat("- [cyan]F5 / Ctrl+S[/cyan] send message", "- F5 / Ctrl+S send message")
-        self._write_chat("- [cyan]Ctrl+Enter[/cyan] send message (when terminal supports it)", "- Ctrl+Enter send message (when terminal supports it)")
-        self._write_chat("- [cyan]F6 / F7 / F8[/cyan] copy Chat / Tools / All", "- F6 / F7 / F8 copy Chat / Tools / All")
-        self._write_chat("[dim]History: Up/Down in input recalls prior prompts.[/dim]", "History: Up/Down in input recalls prior prompts.")
-        self._write_chat("[dim]Composer: Enter newline, use F5/Ctrl+S to send (Ctrl+Enter when supported).[/dim]", "Composer: Enter newline, use F5/Ctrl+S to send (Ctrl+Enter when supported).")
+        self._command_handler.show_help(self)
 
     @staticmethod
     def _extract_local_field(text: str, pattern: str) -> tuple[str | None, str]:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            return None, text
-        value = (match.group(1) or "").strip()
-        updated = f"{text[:match.start()]} {text[match.end():]}".strip()
-        updated = re.sub(r"\s+", " ", updated)
-        return value or None, updated
+        return LocalCommandHandler.extract_local_field(text, pattern)
 
     @staticmethod
     def _is_local_help_request(text: str) -> bool:
-        return text.strip().lower() in {"help", "-h", "--help", "/?"}
+        return LocalCommandHandler.is_local_help_request(text)
 
     def _show_moodboard_usage(self) -> None:
-        self._write_chat("[bold]Moodboard Flow Usage[/bold]", "Moodboard Flow Usage")
-        self._write_chat(
-            "[dim]/moodboard <brief text> [count=12] [palette=#87CEEB] [refs=id1,id2] [workflow=image_edit] [novelty=high][/dim]",
-            "/moodboard <brief text> [count=12] [palette=#87CEEB] [refs=id1,id2] [workflow=image_edit] [novelty=high]",
-        )
-        self._write_chat(
-            "[dim]Example: /moodboard premium athleisure campaign count=16 palette=#C7A66A[/dim]",
-            "Example: /moodboard premium athleisure campaign count=16 palette=#C7A66A",
-        )
+        self._command_handler.show_moodboard_usage(self)
 
     def _show_aspect_usage(self) -> None:
-        self._write_chat("[bold]Aspect Flow Usage[/bold]", "Aspect Flow Usage")
-        self._write_chat(
-            (
-                "[dim]/aspect|/ar|/aspectratio <image_id> targets=16:9,4:5,3:2,9:16 "
-                "[workflow=aspect_ratio_adjustment] [parent=<image_id>] [source=1:1] "
-                "[max_delta=0.45] [denoise=1.0] [sweep=3] [preserve=\"...\"] [negative=\"...\"][/dim]"
-            ),
-            (
-                "/aspect|/ar|/aspectratio <image_id> targets=16:9,4:5,3:2,9:16 "
-                "[workflow=aspect_ratio_adjustment] [parent=<image_id>] [source=1:1] "
-                "[max_delta=0.45] [denoise=1.0] [sweep=3] [preserve=\"...\"] [negative=\"...\"]"
-            ),
-        )
-        self._write_chat(
-            "[dim]Example: /aspectratio 75e92a7e-2838-45a7-6f2c-32a5fde6c300 target=9:16 denoise 1 sweep three different seed values[/dim]",
-            "Example: /aspectratio 75e92a7e-2838-45a7-6f2c-32a5fde6c300 target=9:16 denoise 1 sweep three different seed values",
-        )
+        self._command_handler.show_aspect_usage(self)
 
     def _show_tanktracks_usage(self) -> None:
-        self._write_chat("[bold]Tank Tracks Flow Usage[/bold]", "Tank Tracks Flow Usage")
-        self._write_chat(
-            (
-                "[dim]/tanktracks|/tanktrack <image_id> [parent=<image_id>] [workflow=add_tank_tracks] "
-                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5][/dim]"
-            ),
-            (
-                "/tanktracks|/tanktrack <image_id> [parent=<image_id>] [workflow=add_tank_tracks] "
-                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5]"
-            ),
-        )
-        self._write_chat(
-            "[dim]Example: /tanktracks 1cc224eb-022b-4ce9-0dd8-3f274f4f4300[/dim]",
-            "Example: /tanktracks 1cc224eb-022b-4ce9-0dd8-3f274f4f4300",
-        )
+        self._command_handler.show_tanktracks_usage(self)
 
     def _show_variation_usage(self) -> None:
-        self._write_chat("[bold]Image Variation Flow Usage[/bold]", "Image Variation Flow Usage")
-        self._write_chat(
-            (
-                "[dim]/vary|/variation|/variations <image_id> [parent=<image_id>] "
-                "[workflow=image_variation_maker] [analysis=\"...\"] [upscale=true|false] "
-                "[runs=3] [sweep=seed|prompt|denoise] [denoise=0.4,0.6,0.8][/dim]"
-            ),
-            (
-                "/vary|/variation|/variations <image_id> [parent=<image_id>] "
-                "[workflow=image_variation_maker] [analysis=\"...\"] [upscale=true|false] "
-                "[runs=3] [sweep=seed|prompt|denoise] [denoise=0.4,0.6,0.8]"
-            ),
-        )
-        self._write_chat(
-            "[dim]Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 analysis=\"Describe materials and lighting\"[/dim]",
-            "Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 analysis=\"Describe materials and lighting\"",
-        )
-        self._write_chat(
-            "[dim]Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 run it 3 times varying the prompt[/dim]",
-            "Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 run it 3 times varying the prompt",
-        )
-        self._write_chat(
-            "[dim]Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 denoise 0.4->0.8 step 0.1[/dim]",
-            "Example: /vary 75e92a7e-2838-45a7-6f2c-32a5fde6c300 denoise 0.4->0.8 step 0.1",
-        )
+        self._command_handler.show_variation_usage(self)
 
     def _show_imageedit_usage(self) -> None:
-        self._write_chat("[bold]Image Edit Flow Usage[/bold]", "Image Edit Flow Usage")
-        self._write_chat(
-            (
-                "[dim]/imageedit|/imgedit <image_id> <natural language edit request> "
-                "[workflow=image_edit] [parent=<image_id>] [analysis=\"...\"] "
-                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5][/dim]"
-            ),
-            (
-                "/imageedit|/imgedit <image_id> <natural language edit request> "
-                "[workflow=image_edit] [parent=<image_id>] [analysis=\"...\"] "
-                "[runs=4] [sweep=seed] [seed=123] [post_aspect=4:5]"
-            ),
-        )
-        self._write_chat(
-            "[dim]Example: /imageedit 75e9... make it look like polished brass with softer studio lighting[/dim]",
-            "Example: /imageedit 75e9... make it look like polished brass with softer studio lighting",
-        )
+        self._command_handler.show_imageedit_usage(self)
 
     def _echo_local_command(self, user_text: str) -> None:
-        raw = user_text.strip()
-        self._write_chat(f"[dim]Command: {raw}[/dim]", f"Command: {raw}")
+        self._command_handler.echo_local_command(self, user_text)
 
     def _show_import_workflow_usage(self) -> None:
-        self._write_chat("[bold]Import Workflow Flow Usage[/bold]", "Import Workflow Flow Usage")
-        self._write_chat(
-            (
-                "[dim]/importwf|/importworkflow <image_id> [id=workflow_id] [name=\"...\"] "
-                "[tags=tag1,tag2] [desc=\"...\"] [url=http://127.0.0.1:8787][/dim]"
-            ),
-            (
-                "/importwf|/importworkflow <image_id> [id=workflow_id] [name=\"...\"] "
-                "[tags=tag1,tag2] [desc=\"...\"] [url=http://127.0.0.1:8787]"
-            ),
-        )
-        self._write_chat(
-            "[dim]Example: /importwf b287f5ef-2901-4e27-f6b4-b483fc4a7e00 id=tank_tracks_v1 tags=photarium,imported desc=\"Tank tracks edit workflow\"[/dim]",
-            "Example: /importwf b287f5ef-2901-4e27-f6b4-b483fc4a7e00 id=tank_tracks_v1 tags=photarium,imported desc=\"Tank tracks edit workflow\"",
-        )
+        self._command_handler.show_import_workflow_usage(self)
 
     @staticmethod
     def _normalize_ratio_token(value: str) -> str | None:
-        match = re.search(r"(\d+)\s*[:xX]\s*(\d+)", value)
-        if not match:
-            return None
-        width = int(match.group(1))
-        height = int(match.group(2))
-        if width <= 0 or height <= 0:
-            return None
-        return f"{width}:{height}"
+        return LocalCommandHandler.normalize_ratio_token(value)
 
     @staticmethod
     def _normalize_ratio_list(value: str | None) -> List[str]:
-        if not value:
-            return []
-        normalized: List[str] = []
-        for chunk in value.split(","):
-            token = ChatApp._normalize_ratio_token(chunk.strip())
-            if token and token not in normalized:
-                normalized.append(token)
-        return normalized
+        return LocalCommandHandler().normalize_ratio_list(value)
 
     @staticmethod
     def _find_uuid_token(text: str) -> str | None:
-        match = re.search(
-            r"\b[0-9a-fA-F]{8}-"
-            r"[0-9a-fA-F]{4}-"
-            r"[0-9a-fA-F]{4}-"
-            r"[0-9a-fA-F]{4}-"
-            r"[0-9a-fA-F]{12}\b",
-            text,
-        )
-        if not match:
-            return None
-        return match.group(0)
+        return LocalCommandHandler.find_uuid_token(text)
 
     def _run_moodboard_flow(self, user_text: str) -> None:
-        raw = user_text.strip()
-        parts = raw.split(maxsplit=1)
-        remainder = parts[1].strip() if len(parts) > 1 else ""
-        if self._is_local_help_request(remainder):
-            self._show_moodboard_usage()
-            return
-        self._echo_local_command(user_text)
-
-        count_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:count|n)\s*=\s*(\d{1,2})(?=\s|$)",
-        )
-        palette_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:palette|color)\s*=\s*(#[0-9a-fA-F]{6})(?=\s|$)",
-        )
-        refs_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:refs|images)\s*=\s*([A-Za-z0-9,_-]+)(?=\s|$)",
-        )
-        workflow_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        novelty_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)novelty\s*=\s*(low|medium|high)(?=\s|$)",
-        )
-
-        brief = remainder.strip()
-        refs = [item.strip() for item in (refs_value or "").split(",") if item.strip()]
-        count = 12
-        if count_value is not None:
-            try:
-                count = max(3, min(40, int(count_value)))
-            except ValueError:
-                count = 12
-
-        if not brief and not refs:
-            self._show_moodboard_usage()
-            return
-
-        flow_prompt = self._build_moodboard_flow_prompt(
-            brief=brief,
-            count=count,
-            palette=palette_value,
-            refs=refs,
-            workflow_id=workflow_value,
-            novelty=novelty_value or "high",
-        )
-
-        summary = brief or "reference-led mood board"
-        self._write_chat(
-            f"[bold cyan]Moodboard Flow:[/bold cyan] {summary} (targets {count} variants)",
-            f"Moodboard Flow: {summary} (targets {count} variants)",
-        )
-        if not self._is_ready:
-            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
-            return
-        self._enqueue_request(flow_prompt)
+        self._command_handler.run_moodboard_flow(self, user_text)
 
     def _run_aspect_flow(self, user_text: str) -> None:
-        raw = user_text.strip()
-        parts = raw.split(maxsplit=1)
-        remainder = parts[1].strip() if len(parts) > 1 else ""
-        if self._is_local_help_request(remainder):
-            self._show_aspect_usage()
-            return
-        self._echo_local_command(user_text)
-
-        targets_value, remainder = self._extract_local_field(
-            remainder,
-            r'(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*"([0-9xX:,\s_-]+)"?(?=\s|$)',
-        )
-        if targets_value is None:
-            targets_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*'([0-9xX:,\s_-]+)'?(?=\s|$)",
-            )
-        if targets_value is None:
-            targets_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:targets|target|ratios|ratio)\s*=\s*([0-9xX:,_-]+)(?=\s|$)",
-            )
-        if targets_value is None:
-            targets_value, remainder = self._extract_local_field(
-                remainder,
-                r'(?:^|\s)(?:targets|target|ratios|ratio)\s+"([0-9xX:,\s_-]+)"?(?=\s|$)',
-            )
-        if targets_value is None:
-            targets_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:targets|target|ratios|ratio)\s+'([0-9xX:,\s_-]+)'?(?=\s|$)",
-            )
-        if targets_value is None:
-            targets_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:targets|target|ratios|ratio)\s+([0-9xX:,_-]+)(?=\s|$)",
-            )
-        workflow_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        parent_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:parent|variant_of|upload_to)\s*=\s*([A-Za-z0-9-]+)(?=\s|$)",
-        )
-        source_ratio_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:source|source_ratio)\s*=\s*([0-9xX:]+)(?=\s|$)",
-        )
-        max_delta_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:max_delta|max_step)\s*=\s*([0-9]*\.?[0-9]+)(?=\s|$)",
-        )
-        denoise_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)denoise\s*=\s*([0-9]*\.?[0-9]+)(?=\s|$)",
-        )
-        if denoise_value is None:
-            denoise_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)denoise\s+([0-9]*\.?[0-9]+)(?=\s|$)",
-            )
-        seed_values_text, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:seeds?|seed_values?)\s*=\s*([0-9,\s]+)(?=\s|$)",
-        )
-        sweep_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)sweep\s*=\s*(\d{1,2})(?=\s|$)",
-        )
-        if sweep_value is None:
-            sweep_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)sweep\s+(\d{1,2})(?=\s|$)",
-            )
-        if sweep_value is None:
-            sweep_word, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)sweep\s+([A-Za-z]+)\b",
-            )
-            if sweep_word:
-                sweep_value = str(self._NUMBER_WORDS.get(sweep_word.lower(), ""))
-        preserve_value, remainder = self._extract_local_field(
-            remainder,
-            r'(?:^|\s)(?:preserve|positive|guidance)\s*=\s*"([^"]+)"(?=\s|$)',
-        )
-        if preserve_value is None:
-            preserve_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:preserve|positive|guidance)\s*=\s*'([^']+)'(?=\s|$)",
-            )
-        negative_value, remainder = self._extract_local_field(
-            remainder,
-            r'(?:^|\s)(?:negative|avoid)\s*=\s*"([^"]+)"(?=\s|$)',
-        )
-        if negative_value is None:
-            negative_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:negative|avoid)\s*=\s*'([^']+)'(?=\s|$)",
-            )
-
-        remainder = self._strip_variation_source_prefix(remainder)
-        inferred_source = self._find_uuid_token(remainder) if remainder else None
-        if inferred_source:
-            source_id = inferred_source
-            extra_text = re.sub(rf"\b{re.escape(inferred_source)}\b", " ", remainder, count=1)
-            extra_text = re.sub(r"\s+", " ", extra_text).strip()
-        else:
-            source_id = remainder.split(maxsplit=1)[0] if remainder else ""
-            source_id = source_id.strip()
-            extra_text = remainder[len(source_id) :].strip() if remainder and source_id else ""
-        if not targets_value and extra_text:
-            targets_value = self._infer_aspect_targets_from_text(extra_text)
-        target_ratios = self._normalize_ratio_list(targets_value)
-        source_ratio_hint = self._normalize_ratio_token(source_ratio_value or "")
-        seed_values = self._parse_seed_values(seed_values_text)
-        seed_sweep_count = 0
-        if seed_values:
-            seed_sweep_count = len(seed_values)
-        elif sweep_value:
-            try:
-                seed_sweep_count = max(0, min(24, int(sweep_value)))
-            except ValueError:
-                seed_sweep_count = 0
-        if seed_sweep_count > 0:
-            if seed_values_text:
-                self._write_chat(
-                    "[yellow]Seed sweep policy: ignoring fixed seed lists and generating fresh random seeds for this run.[/yellow]",
-                    "Seed sweep policy: ignoring fixed seed lists and generating fresh random seeds for this run.",
-                )
-            seed_values = self._generate_random_seed_values(seed_sweep_count)
-        denoise_override: float | None = None
-        if denoise_value is not None:
-            try:
-                denoise_override = max(0.0, min(1.0, float(denoise_value)))
-            except ValueError:
-                denoise_override = None
-
-        max_delta = 0.45
-        if max_delta_value is not None:
-            try:
-                max_delta = max(0.1, min(1.5, float(max_delta_value)))
-            except ValueError:
-                max_delta = 0.45
-
-        if not source_id or not target_ratios:
-            self._show_aspect_usage()
-            return
-
-        workflow_id = workflow_value or "aspect_ratio_adjustment"
-        variant_of = parent_value or source_id
-        flow_prompt = self._build_aspect_flow_prompt(
-            source_id=source_id,
-            target_ratios=target_ratios,
-            variant_of=variant_of,
-            workflow_id=workflow_id,
-            source_ratio_hint=source_ratio_hint,
-            max_delta=max_delta,
-            denoise_override=denoise_override,
-            seed_sweep_count=seed_sweep_count,
-            seed_values=seed_values,
-            preserve_guidance=preserve_value,
-            negative_guidance=negative_value,
-        )
-        self._write_chat(
-            f"[bold cyan]Aspect Flow:[/bold cyan] source={source_id} targets={', '.join(target_ratios)}",
-            f"Aspect Flow: source={source_id} targets={', '.join(target_ratios)}",
-        )
-        if not self._is_ready:
-            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
-            return
-        self._enqueue_request(flow_prompt)
+        self._command_handler.run_aspect_flow(self, user_text)
 
     def _run_tanktracks_flow(self, user_text: str) -> None:
-        raw = user_text.strip()
-        parts = raw.split(maxsplit=1)
-        remainder = parts[1].strip() if len(parts) > 1 else ""
-        if self._is_local_help_request(remainder):
-            self._show_tanktracks_usage()
-            return
-        self._echo_local_command(user_text)
-
-        variant_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:parent|variant_of|upload_to)\s*=\s*([A-Za-z0-9-]+)(?=\s|$)",
-        )
-        workflow_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        runs_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:runs?|count)\s*=\s*(\d{1,2})(?=\s|$)",
-        )
-        if runs_value is None:
-            runs_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:runs?|count)\s+(\d{1,2})(?=\s|$)",
-            )
-        sweep_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:sweep|vary|variation)\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        post_aspect_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:post_aspect|post_ar|output_aspect|aspect)\s*=\s*([0-9xX:]+)(?=\s|$)",
-        )
-        seed_start_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:seed_start|start_seed|seed)\s*=\s*(\d{1,20})(?=\s|$)",
-        )
-        prompt_value, remainder = self._extract_local_field(
-            remainder,
-            r'(?:^|\s)(?:prompt|instruction)\s*=\s*"([^"]+)"(?=\s|$)',
-        )
-        if prompt_value is None:
-            prompt_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:prompt|instruction)\s*=\s*'([^']+)'(?=\s|$)",
-            )
-        if prompt_value is not None:
-            self._write_chat(
-                "[yellow]/tanktracks uses a fixed workflow prompt. Remove prompt=... and retry.[/yellow]",
-                "/tanktracks uses a fixed workflow prompt. Remove prompt=... and retry.",
-            )
-            return
-
-        source_id = remainder.split(maxsplit=1)[0] if remainder else ""
-        source_id = source_id.strip()
-        if not source_id:
-            self._show_tanktracks_usage()
-            return
-
-        variant_of = variant_value or source_id
-        workflow_id = workflow_value or "add_tank_tracks"
-        extra_text = remainder[len(source_id) :].strip() if remainder else ""
-        run_count: int | None = None
-        if runs_value is not None:
-            try:
-                run_count = max(1, min(24, int(runs_value)))
-            except ValueError:
-                run_count = None
-        if run_count is None and extra_text:
-            run_count = self._parse_run_count_from_text(extra_text)
-        if run_count is None:
-            run_count = 1
-        sweep_target = self._normalize_sweep_target(sweep_value)
-        if sweep_target is None and run_count > 1:
-            sweep_target = "seed"
-        post_aspect_ratio = self._normalize_ratio_token(post_aspect_value or "")
-        if post_aspect_ratio is None:
-            inferred_post_aspect = self._infer_aspect_targets_from_text(extra_text)
-            post_aspect_ratio = self._normalize_ratio_token(inferred_post_aspect or "")
-        seed_start: int | None = None
-        if seed_start_value is not None:
-            try:
-                seed_start = int(seed_start_value)
-            except ValueError:
-                seed_start = None
-
-        if not self._is_ready:
-            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
-            return
-        if run_count > 1 and sweep_target == "seed":
-            if seed_start_value is not None:
-                self._write_chat(
-                    "[yellow]Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.[/yellow]",
-                    "Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.",
-                )
-            random_seeds = self._generate_random_seed_values(run_count)
-            self._write_chat(
-                (
-                    f"[bold cyan]Tank Tracks Flow:[/bold cyan] source={source_id} variant_of={variant_of} "
-                    f"runs={run_count} sweep=seed"
-                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-                ),
-                (
-                    f"Tank Tracks Flow: source={source_id} variant_of={variant_of} runs={run_count} sweep=seed"
-                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-                ),
-            )
-            for run_index, seed_value in enumerate(random_seeds):
-                flow_prompt = self._build_tanktracks_flow_prompt(
-                    source_id=source_id,
-                    variant_of=variant_of,
-                    workflow_id=workflow_id,
-                    seed_override=seed_value,
-                    post_aspect_ratio=post_aspect_ratio,
-                    run_index=run_index + 1,
-                    run_count=run_count,
-                )
-                self._enqueue_request(flow_prompt)
-            return
-
-        flow_prompt = self._build_tanktracks_flow_prompt(
-            source_id=source_id,
-            variant_of=variant_of,
-            workflow_id=workflow_id,
-            seed_override=seed_start,
-            post_aspect_ratio=post_aspect_ratio,
-            run_index=None,
-            run_count=None,
-        )
-        self._write_chat(
-            (
-                f"[bold cyan]Tank Tracks Flow:[/bold cyan] source={source_id} variant_of={variant_of}"
-                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-            ),
-            (
-                f"Tank Tracks Flow: source={source_id} variant_of={variant_of}"
-                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-            ),
-        )
-        self._enqueue_request(flow_prompt)
+        self._command_handler.run_tanktracks_flow(self, user_text)
 
     def _run_variation_flow(self, user_text: str) -> None:
-        raw = user_text.strip()
-        parts = raw.split(maxsplit=1)
-        remainder = parts[1].strip() if len(parts) > 1 else ""
-        if self._is_local_help_request(remainder):
-            self._show_variation_usage()
-            return
-        self._echo_local_command(user_text)
-
-        variant_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:parent|variant_of|upload_to)\s*=\s*([A-Za-z0-9-]+)(?=\s|$)",
-        )
-        workflow_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        analysis_value, remainder = self._extract_local_field(
-            remainder,
-            (
-                r'(?:^|\s)(?:analysis|analysis_prompt|analysis_instructions|image_analysis_prompt|'
-                r'image_analysis_instructions|prompt|instruction)\s*=\s*"([^"]+)"(?=\s|$)'
-            ),
-        )
-        if analysis_value is None:
-            analysis_value, remainder = self._extract_local_field(
-                remainder,
-                (
-                    r"(?:^|\s)(?:analysis|analysis_prompt|analysis_instructions|image_analysis_prompt|"
-                    r"image_analysis_instructions|prompt|instruction)\s*=\s*'([^']+)'(?=\s|$)"
-                ),
-            )
-        upscale_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)upscale\s*=\s*(true|false|1|0|yes|no)(?=\s|$)",
-        )
-        if upscale_value is None:
-            upscale_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)upscale\s+(true|false|1|0|yes|no)(?=\s|$)",
-            )
-        run_count_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:runs?|run_count|count)\s*=\s*(\d{1,2})(?=\s|$)",
-        )
-        if run_count_value is None:
-            run_count_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:runs?|run_count|count)\s+(\d{1,2})(?=\s|$)",
-            )
-        sweep_target_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:sweep|vary|variation)\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        if sweep_target_value is None:
-            sweep_target_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:sweep|vary|variation)\s+([A-Za-z0-9._-]+)(?=\s|$)",
-            )
-
-        remainder = self._strip_variation_source_prefix(remainder)
-        source_id = remainder.split(maxsplit=1)[0] if remainder else ""
-        source_id = source_id.strip()
-        if not source_id:
-            self._show_variation_usage()
-            return
-        extra_text = remainder[len(source_id) :].strip() if remainder else ""
-
-        upscale_flag: bool | None = None
-        if upscale_value is not None:
-            normalized = upscale_value.strip().lower()
-            if normalized in {"1", "true", "yes", "y", "on"}:
-                upscale_flag = True
-            elif normalized in {"0", "false", "no", "n", "off"}:
-                upscale_flag = False
-
-        run_count: int | None = None
-        if run_count_value is not None:
-            try:
-                run_count = max(1, min(24, int(run_count_value)))
-            except ValueError:
-                run_count = None
-        if run_count is None and extra_text:
-            run_count = self._parse_run_count_from_text(extra_text)
-
-        # Shorthand like "sweep 4 runs" usually means run-count, not sweep target "4".
-        if sweep_target_value and str(sweep_target_value).strip().isdigit():
-            if run_count is None:
-                try:
-                    run_count = max(1, min(24, int(str(sweep_target_value).strip())))
-                except ValueError:
-                    run_count = None
-            sweep_target_value = None
-
-        sweep_target = self._normalize_sweep_target(sweep_target_value)
-        if sweep_target is None and extra_text:
-            sweep_target = self._infer_variation_sweep(extra_text)
-
-        sweep_param, sweep_values = self._parse_sweep_values(extra_text)
-        if sweep_param and sweep_target is None:
-            sweep_target = self._normalize_sweep_target(sweep_param)
-        if sweep_values:
-            sweep_values = sweep_values[:24]
-            if run_count is None:
-                run_count = len(sweep_values)
-        if run_count and run_count > 1 and sweep_target is None:
-            sweep_target = "seed"
-        random_seed_values: List[int] = []
-        if run_count and run_count > 1 and sweep_target == "seed":
-            random_seed_values = self._generate_random_seed_values(run_count)
-
-        variant_of = variant_value or source_id
-        workflow_id = workflow_value or "image_variation_maker"
-
-        flow_prompt = self._build_variation_flow_prompt(
-            source_id=source_id,
-            variant_of=variant_of,
-            workflow_id=workflow_id,
-            analysis_prompt=analysis_value,
-            upscale=upscale_flag,
-            run_count=run_count,
-            sweep_target=sweep_target,
-            sweep_values=sweep_values,
-            seed_values=random_seed_values,
-            extra_instructions=extra_text,
-        )
-        self._write_chat(
-            f"[bold cyan]Variation Flow:[/bold cyan] source={source_id} variant_of={variant_of}",
-            f"Variation Flow: source={source_id} variant_of={variant_of}",
-        )
-        if not self._is_ready:
-            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
-            return
-        self._enqueue_request(flow_prompt)
+        self._command_handler.run_variation_flow(self, user_text)
 
     @staticmethod
     def _strip_variation_source_prefix(text: str) -> str:
-        if not text:
-            return text
-        normalized = re.sub(
-            r"^\s*(?:image\s+id|image_id|image|id)\b\s*(?:[:=]\s*)?",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        )
-        return normalized.strip()
+        return LocalCommandHandler.strip_variation_source_prefix(text)
 
     def _run_import_workflow_flow(self, user_text: str) -> None:
-        raw = user_text.strip()
-        parts = raw.split(maxsplit=1)
-        remainder = parts[1].strip() if len(parts) > 1 else ""
-        if self._is_local_help_request(remainder):
-            self._show_import_workflow_usage()
-            return
-        self._echo_local_command(user_text)
-
-        workflow_id_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:id|workflow|workflow_id)\s*=\s*([A-Za-z0-9_-]+)(?=\s|$)",
-        )
-        tags_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)tags\s*=\s*([A-Za-z0-9,_-]+)(?=\s|$)",
-        )
-        mcp_url_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:url|mcp|photarium_url)\s*=\s*(https?://[^\s]+)(?=\s|$)",
-        )
-        name_value, remainder = self._extract_local_field(
-            remainder,
-            r'(?:^|\s)name\s*=\s*"([^"]+)"(?=\s|$)',
-        )
-        if name_value is None:
-            name_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)name\s*=\s*'([^']+)'(?=\s|$)",
-            )
-        desc_value, remainder = self._extract_local_field(
-            remainder,
-            r'(?:^|\s)(?:desc|description)\s*=\s*"([^"]+)"(?=\s|$)',
-        )
-        if desc_value is None:
-            desc_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:desc|description)\s*=\s*'([^']+)'(?=\s|$)",
-            )
-
-        image_id = remainder.split(maxsplit=1)[0] if remainder else ""
-        image_id = image_id.strip()
-        if not image_id:
-            self._show_import_workflow_usage()
-            return
-
-        workflow_id = workflow_id_value or f"photarium_{image_id.split('-')[0]}_workflow"
-        workflow_name = name_value or workflow_id
-        tags = [item.strip() for item in (tags_value or "photarium,imported").split(",") if item.strip()]
-        mcp_url = mcp_url_value or "http://127.0.0.1:8787"
-
-        flow_prompt = self._build_import_workflow_flow_prompt(
-            image_id=image_id,
-            workflow_id=workflow_id,
-            workflow_name=workflow_name,
-            tags=tags,
-            description=desc_value,
-            photarium_mcp_url=mcp_url,
-        )
-        self._write_chat(
-            f"[bold cyan]Import Workflow Flow:[/bold cyan] image={image_id} id={workflow_id}",
-            f"Import Workflow Flow: image={image_id} id={workflow_id}",
-        )
-        if not self._is_ready:
-            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
-            return
-        self._enqueue_request(flow_prompt)
+        self._command_handler.run_import_workflow_flow(self, user_text)
 
     def _run_imageedit_flow(self, user_text: str) -> None:
-        raw = user_text.strip()
-        parts = raw.split(maxsplit=1)
-        remainder = parts[1].strip() if len(parts) > 1 else ""
-        if self._is_local_help_request(remainder):
-            self._show_imageedit_usage()
-            return
-        self._echo_local_command(user_text)
+        self._command_handler.run_imageedit_flow(self, user_text)
 
-        variant_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:parent|variant_of|upload_to)\s*=\s*([A-Za-z0-9-]+)(?=\s|$)",
-        )
-        workflow_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        runs_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:runs?|count)\s*=\s*(\d{1,2})(?=\s|$)",
-        )
-        if runs_value is None:
-            runs_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:runs?|count)\s+(\d{1,2})(?=\s|$)",
-            )
-        sweep_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:sweep|vary|variation)\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)",
-        )
-        post_aspect_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:post_aspect|post_ar|output_aspect|aspect)\s*=\s*([0-9xX:]+)(?=\s|$)",
-        )
-        seed_start_value, remainder = self._extract_local_field(
-            remainder,
-            r"(?:^|\s)(?:seed_start|start_seed|seed)\s*=\s*(\d{1,20})(?=\s|$)",
-        )
-        analysis_value, remainder = self._extract_local_field(
-            remainder,
-            r'(?:^|\s)(?:analysis|analysis_prompt)\s*=\s*"([^"]+)"(?=\s|$)',
-        )
-        if analysis_value is None:
-            analysis_value, remainder = self._extract_local_field(
-                remainder,
-                r"(?:^|\s)(?:analysis|analysis_prompt)\s*=\s*'([^']+)'(?=\s|$)",
-            )
-
-        remainder = self._strip_variation_source_prefix(remainder)
-        source_id = remainder.split(maxsplit=1)[0] if remainder else ""
-        source_id = source_id.strip()
-        if not source_id:
-            self._show_imageedit_usage()
-            return
-        edit_request = remainder[len(source_id) :].strip() if remainder else ""
-        if not edit_request:
-            self._show_imageedit_usage()
-            return
-
-        variant_of = variant_value or source_id
-        workflow_id = workflow_value or "image_edit"
-        run_count: int | None = None
-        if runs_value is not None:
-            try:
-                run_count = max(1, min(24, int(runs_value)))
-            except ValueError:
-                run_count = None
-        if run_count is None and edit_request:
-            run_count = self._parse_run_count_from_text(edit_request)
-        if run_count is None:
-            run_count = 1
-        sweep_target = self._normalize_sweep_target(sweep_value)
-        if sweep_target is None and run_count > 1:
-            sweep_target = "seed"
-        post_aspect_ratio = self._normalize_ratio_token(post_aspect_value or "")
-        seed_start: int | None = None
-        if seed_start_value is not None:
-            try:
-                seed_start = int(seed_start_value)
-            except ValueError:
-                seed_start = None
-        if not self._is_ready:
-            self._write_chat("[yellow]Still connecting. Please wait.[/yellow]", "Still connecting. Please wait.")
-            return
-        if run_count > 1 and sweep_target == "seed":
-            if seed_start_value is not None:
-                self._write_chat(
-                    "[yellow]Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.[/yellow]",
-                    "Seed sweep policy: ignoring seed_start/seed for sweeps and generating fresh random seeds.",
-                )
-            random_seeds = self._generate_random_seed_values(run_count)
-            self._write_chat(
-                (
-                    f"[bold cyan]Image Edit Flow:[/bold cyan] source={source_id} workflow={workflow_id} "
-                    f"runs={run_count} sweep=seed"
-                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-                ),
-                (
-                    f"Image Edit Flow: source={source_id} workflow={workflow_id} runs={run_count} sweep=seed"
-                    + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-                ),
-            )
-            for run_index, seed_value in enumerate(random_seeds):
-                flow_prompt = self._build_imageedit_flow_prompt(
-                    source_id=source_id,
-                    variant_of=variant_of,
-                    workflow_id=workflow_id,
-                    edit_request=edit_request,
-                    analysis_prompt=analysis_value,
-                    seed_override=seed_value,
-                    post_aspect_ratio=post_aspect_ratio,
-                    run_index=run_index + 1,
-                    run_count=run_count,
-                )
-                self._enqueue_request(flow_prompt)
-            return
-
-        flow_prompt = self._build_imageedit_flow_prompt(
-            source_id=source_id,
-            variant_of=variant_of,
-            workflow_id=workflow_id,
-            edit_request=edit_request,
-            analysis_prompt=analysis_value,
-            seed_override=seed_start,
-            post_aspect_ratio=post_aspect_ratio,
-            run_index=None,
-            run_count=None,
-        )
-        self._write_chat(
-            (
-                f"[bold cyan]Image Edit Flow:[/bold cyan] source={source_id} workflow={workflow_id}"
-                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-            ),
-            (
-                f"Image Edit Flow: source={source_id} workflow={workflow_id}"
-                + (f" post_aspect={post_aspect_ratio}" if post_aspect_ratio else "")
-            ),
-        )
-        self._enqueue_request(flow_prompt)
-
-    @staticmethod
     def _build_moodboard_flow_prompt(
+        self,
         *,
         brief: str,
         count: int,
@@ -1790,40 +879,17 @@ class ChatApp(App):
         workflow_id: str | None,
         novelty: str,
     ) -> str:
-        refs_text = ", ".join(refs) if refs else "none provided"
-        workflow_text = workflow_id or "auto-select via capabilities"
-        brief_text = brief or "Build a brand-inspiration mood board from available references."
-        palette_text = palette or "not specified"
-        novelty_text = novelty.lower().strip() or "high"
-        return (
-            "MOODBOARD FLOW REQUEST\n"
-            "Run this as an agentic multi-step flow inside the TUI.\n\n"
-            f"Creative brief: {brief_text}\n"
-            f"Target candidate count: {count}\n"
-            f"Palette hint: {palette_text}\n"
-            f"Starter reference image IDs: {refs_text}\n"
-            f"Workflow preference: {workflow_text}\n\n"
-            f"Novelty target: {novelty_text}\n\n"
-            "Execution rules:\n"
-            "1. Do retrieval first: use semantic search and color-oriented search tools when available.\n"
-            "2. Keep discovery lightweight: at most 2 discovery/introspection tool calls before first generation run.\n"
-            "3. Draft at least 3 distinct creative directions from the brief before generation.\n"
-            "4. Rewrite prompts so they are not copied from source captions/text and explicitly remove any source text/logo artifacts.\n"
-            "5. Enforce generation-mode mix: at least 70% text-to-image or weak-reference generation, at most 30% direct img2img/reference edits.\n"
-            "6. If using image-conditioned runs, keep transformation strong enough to avoid near-duplicate copies of source images.\n"
-            "7. Vary at least 3 axes per direction: reference subset, prompt framing, and seed/variation controls.\n"
-            "8. Apply anti-clone gates: reject outputs that are obvious duplicates or retain original text overlays/watermarks.\n"
-            "9. For workflows_run/workflows_run_aspect_ratio_adjustment use wait_timeout_s=300 and wait_poll_ms=1000 by default.\n"
-            "10. If output is delayed and prompt_id exists, use workflows_watch(prompt_id=..., inactivity_timeout_s=300, include_history=true) before retrying.\n"
-            "11. Prefer uploading or linking outputs so the board is browseable.\n"
-            "12. Curate final results into grouped directions (e.g., 3-5 clusters) and explain differences.\n"
-            "13. Keep narration concise; prioritize executing tool calls over long planning prose.\n"
-            "14. Ask at most one clarifying question only if strictly required to proceed.\n"
-            "15. Do not ask for CLI commands or scripts; complete this with available MCP tools.\n"
+        return self._flow_prompt_builder.build_moodboard_flow_prompt(
+            brief=brief,
+            count=count,
+            palette=palette,
+            refs=refs,
+            workflow_id=workflow_id,
+            novelty=novelty,
         )
 
-    @staticmethod
     def _build_aspect_flow_prompt(
+        self,
         *,
         source_id: str,
         target_ratios: List[str],
@@ -1837,367 +903,109 @@ class ChatApp(App):
         preserve_guidance: str | None,
         negative_guidance: str | None,
     ) -> str:
-        target_text = ", ".join(target_ratios)
-        source_hint_text = source_ratio_hint or "none provided; infer from image dimensions"
-        preserve_text = preserve_guidance or (
-            "Keep the same subject, scene, composition intent, lighting, and style. Keep the main subject completely in the frame and in full view. Avoid excessive cropping of the main subject. "
-            "Only adjust framing/outpaint while keeping the main subject completely in the frame and in full view while reaching the target ratio."
-        )
-        negative_text = negative_guidance or (
-            "Do not change subject identity or key scene elements. "
-            "Avoid ghosting, duplicate limbs, warped geometry, or scene drift."
-        )
-        denoise_text = f"{denoise_override:.3f}" if denoise_override is not None else "workflow default"
-        if seed_values:
-            seed_sweep_text = ", ".join(str(value) for value in seed_values)
-        elif seed_sweep_count > 0:
-            seed_sweep_text = f"{seed_sweep_count} distinct seeds (agent selects values)"
-        else:
-            seed_sweep_text = "none requested"
-        if workflow_id == "aspect_ratio_adjustment":
-            return (
-                "ASPECT RATIO FLOW REQUEST\n"
-                "Run this as a deterministic, minimal-branch flow inside the TUI.\n\n"
-                f"Source catalog image ID: {source_id}\n"
-                f"Requested target aspect ratios: {target_text}\n"
-                f"Source ratio hint: {source_hint_text}\n"
-                f"Requested upload target image ID: {variant_of}\n"
-                f"Workflow preference: {workflow_id}\n"
-                f"Max safe per-step ratio delta (log-space): {max_delta:.2f}\n"
-                f"Denoise override: {denoise_text}\n"
-                f"Seed sweep request: {seed_sweep_text}\n"
-                f"Positive preservation guidance: {preserve_text}\n"
-                f"Negative guidance: {negative_text}\n\n"
-                "Execution rules (aspect_ratio_adjustment fast path):\n"
-                "1. Download source image from Photarium by canonical image ID (never by display name).\n"
-                "2. Determine true source aspect ratio from Photarium metadata width/height when available; otherwise use workflows_image_info on the downloaded file. If a hint is provided, validate it.\n"
-                "3. Treat each requested target ratio as an independent branch from the same original source image (never use one target branch output as another target's input).\n"
-                "4. For plain ratio requests like 3:2 or 4:5, do not inspect workflow enums. Use custom ratio mode directly (custom_ratio=true, custom_aspect_ratio=<W:H>) or the specialized aspect-ratio tool with the plain ratio token.\n"
-                "5. Do not call workflows_params_get, workflows_get, or tool_schema_get just to inspect aspect_ratio enum labels for this flow. Only introspect if an actual tool error says a specific override/field is unsupported.\n"
-                "6. If Denoise override is not provided, prefer workflows_run_aspect_ratio_adjustment first (image_path + aspect_ratio + optional prompts/seed/output_base_name).\n"
-                "7. If Denoise override is provided, go straight to workflows_run for workflow_id aspect_ratio_adjustment with an explicit overrides object (include image, custom_ratio/custom_aspect_ratio, denoise, filename_prefix, plus seed when sweeping).\n"
-                "8. If workflows_run_aspect_ratio_adjustment fails with a tool-specific internal error, fall back once to workflows_run with explicit overrides instead of repeating introspection.\n"
-                "9. If source->target exceeds max delta, insert one or more intermediate ratios only within that branch; keep all branches rooted at the original source image.\n"
-                "10. Include positive and negative guidance each step to preserve subject and scene integrity.\n"
-                "11. After each run, verify output_images. If comfy_download_image fails for an output, call comfy_history_get for the prompt_id and retry comfy_download_image with exact filename/subfolder/type. Do not use photarium_import_url(includeData=true) -> photarium_upload_image as an image transport workaround.\n"
-                "12. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-                "13. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 12.\n"
-                "14. Upload final outputs as Photarium variants under the effective parent image ID and return a concise ratio->image_id mapping.\n"
-                "15. Include branch traces (source->...->target) for each requested ratio and confirm every branch started from the same source image.\n"
-                "16. If seed sweep is requested, run one output per seed with all non-seed overrides fixed; report seed->image_id mapping.\n"
-                "17. Do not ask for CLI commands or scripts; complete with available MCP tools.\n"
-            )
-        return (
-            "ASPECT RATIO FLOW REQUEST\n"
-            "Run this as an agentic multi-step flow inside the TUI.\n\n"
-            f"Source catalog image ID: {source_id}\n"
-            f"Requested target aspect ratios: {target_text}\n"
-            f"Source ratio hint: {source_hint_text}\n"
-            f"Requested upload target image ID: {variant_of}\n"
-            f"Workflow preference: {workflow_id}\n"
-            f"Max safe per-step ratio delta (log-space): {max_delta:.2f}\n"
-            f"Denoise override: {denoise_text}\n"
-            f"Seed sweep request: {seed_sweep_text}\n"
-            f"Positive preservation guidance: {preserve_text}\n"
-            f"Negative guidance: {negative_text}\n\n"
-            "Execution rules:\n"
-            "1. Download source image from Photarium by canonical image ID (never by display name).\n"
-            "2. Determine true source aspect ratio from Photarium metadata width/height when available; otherwise use workflows_image_info on the downloaded file. If a hint is provided, validate it.\n"
-            "3. Discover allowed aspect_ratio choices from workflow/node capabilities (FluxResolutionNode) and restrict runs to that set.\n"
-            "4. Normalize all ratios to W:H. Pass exact allowed enum strings to workflow calls (for example '4:5 (Artistic Frame)'). If a requested ratio is unavailable, map to nearest allowed ratio and report substitutions.\n"
-            "5. Treat each requested target ratio as an independent branch from the same original source image.\n"
-            "6. For each branch, if source->target exceeds max delta, insert one or more allowed intermediate ratios only within that branch.\n"
-            "7. Reuse one deterministic seed across branches when the workflow exposes seed control.\n"
-            "8. Execute each branch with workflows_run_aspect_ratio_adjustment using workflow_id and source image_path as the branch root (never use one target branch output as another target's input).\n"
-            "9. Include positive and negative guidance each step to preserve subject and scene integrity.\n"
-            "10. After each run, verify output_images and do sanity checks for subject retention; if drift/ghosting appears, retry that same branch with closer intermediate and stronger guidance.\n"
-            "11. If comfy_download_image fails for an output, call comfy_history_get for the prompt_id and retry comfy_download_image with exact filename/subfolder/type. Do not use photarium_import_url(includeData=true) -> photarium_upload_image as an image transport workaround.\n"
-            "12. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-            "13. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 12.\n"
-            "14. Upload final outputs as Photarium variants under the effective parent image ID and return a concise ratio->image_id mapping.\n"
-            "15. Include branch traces (source->...->target) for each requested ratio and confirm every branch started from the same source image.\n"
-            "16. If denoise override is provided, set denoise to that exact value for each run.\n"
-            "17. If seed sweep is requested, run one output per seed with all non-seed overrides fixed; report seed->image_id mapping.\n"
-            "18. Do not ask for CLI commands or scripts; complete with available MCP tools.\n"
+        return self._flow_prompt_builder.build_aspect_flow_prompt(
+            source_id=source_id,
+            target_ratios=target_ratios,
+            variant_of=variant_of,
+            workflow_id=workflow_id,
+            source_ratio_hint=source_ratio_hint,
+            max_delta=max_delta,
+            denoise_override=denoise_override,
+            seed_sweep_count=seed_sweep_count,
+            seed_values=seed_values,
+            preserve_guidance=preserve_guidance,
+            negative_guidance=negative_guidance,
         )
 
     @staticmethod
     def _parse_seed_values(raw: str | None) -> List[int]:
-        if not raw:
-            return []
-        values: List[int] = []
-        for chunk in raw.split(","):
-            text = chunk.strip()
-            if not text:
-                continue
-            try:
-                values.append(int(text))
-            except ValueError:
-                continue
-        return values[:24]
+        return FlowPromptBuilder.parse_seed_values(raw)
 
     def _generate_random_seed_values(self, count: int) -> List[int]:
-        capped = max(0, min(24, int(count)))
-        if capped <= 0:
-            return []
-        values: List[int] = []
-        seen: set[int] = set()
-        # Use cryptographic RNG so each sweep run is non-deterministic.
-        while len(values) < capped:
-            candidate = secrets.randbelow(2_147_483_647) + 1
-            if candidate in seen:
-                continue
-            seen.add(candidate)
-            values.append(candidate)
-        return values
+        return FlowPromptBuilder.generate_random_seed_values(count)
 
     def _parse_run_count_from_text(self, text: str) -> int | None:
-        if not text:
+        return self._flow_prompt_builder.parse_run_count_from_text(text)
+
+    def _build_recent_signals_tool_grounded_lines(
+        self,
+        user_text: str,
+        tool_events: List[Any],
+    ) -> List[str] | None:
+        requested_count = _parse_recent_signal_request_count(user_text, self._NUMBER_WORDS)
+        if requested_count is None:
             return None
-        lowered = text.lower()
-        match = re.search(r"\brun(?:\s+it)?\s+(\d{1,2})\s+times?\b", lowered)
-        if not match:
-            match = re.search(r"\b(\d{1,2})\s+times?\b", lowered)
-        if not match:
-            match = re.search(r"\b(?:across|over|for)?\s*(\d{1,2})\s+seeds?\b", lowered)
-        if match:
-            try:
-                return max(1, min(24, int(match.group(1))))
-            except ValueError:
-                return None
-        match = re.search(r"\brun(?:\s+it)?\s+([a-z]+)\s+times?\b", lowered)
-        if not match:
-            match = re.search(r"\b([a-z]+)\s+times?\b", lowered)
-        if not match:
-            match = re.search(r"\b(?:across|over|for)?\s*([a-z]+)\s+seeds?\b", lowered)
-        if match:
-            word = match.group(1).strip().lower()
-            value = self._NUMBER_WORDS.get(word)
-            if value is not None:
-                return max(1, min(24, value))
+
+        preferred_tools = (
+            # Canonical Digester tools (preferred).
+            "digester_signals_list_summaries",
+            "digester_get_story_queue",
+            # Legacy/alternate tool surfaces.
+            "editorial_signals_list_summaries",
+            "editorial_signals_list",
+            "editorial_get_story_queue",
+            "get_story_queue",
+        )
+
+        for tool_name in preferred_tools:
+            for event in reversed(tool_events):
+                if event.name != tool_name or event.error:
+                    continue
+                items = _extract_signal_items_from_tool_result(event.result)
+                if not items:
+                    continue
+                return _format_recent_signal_lines(items, requested_count)
         return None
 
     def _normalize_sweep_target(self, value: str | None) -> str | None:
-        if not value:
-            return None
-        token = value.strip().lower()
-        aliases = {
-            "seed": "seed",
-            "seeds": "seed",
-            "prompt": "prompt",
-            "analysis": "prompt",
-            "analysis_prompt": "prompt",
-            "analysis_instructions": "prompt",
-            "image_analysis_prompt": "prompt",
-            "image_analysis_instructions": "prompt",
-            "denoise": "denoise",
-            "cfg": "cfg",
-            "guidance": "guidance",
-            "strength": "strength",
-        }
-        return aliases.get(token, token)
+        return FlowPromptBuilder.normalize_sweep_target(value)
 
     def _infer_variation_sweep(self, text: str) -> str | None:
-        if not text:
-            return None
-        lowered = text.lower()
-        if re.search(r"\b(prompt|analysis|instruction)s?\b", lowered) and re.search(
-            r"\b(vary|varying|sweep|variation)\b",
-            lowered,
-        ):
-            return "prompt"
-        if re.search(r"\bdenoise\b", lowered) and re.search(
-            r"\b(vary|varying|sweep|variation)\b",
-            lowered,
-        ):
-            return "denoise"
-        if re.search(r"\bseeds?\b", lowered):
-            return "seed"
-        match = re.search(r"\b(?:sweep|vary|varying)\s+(?:the\s+)?([a-z_][a-z0-9_-]*)", lowered)
-        if match:
-            return self._normalize_sweep_target(match.group(1))
-        return None
+        return self._flow_prompt_builder.infer_variation_sweep(text)
 
     def _parse_sweep_values(self, text: str) -> tuple[str | None, List[float]]:
-        if not text:
-            return None, []
-        param_pattern = r"(denoise|cfg|guidance|strength|steps)"
-        range_match = re.search(
-            rf"\b{param_pattern}\s*=?\s*(\d*\.?\d+)\s*(?:->|-)\s*(\d*\.?\d+)\s*(?:step|by)\s*(\d*\.?\d+)",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if range_match:
-            param = range_match.group(1).lower()
-            start = float(range_match.group(2))
-            end = float(range_match.group(3))
-            step = float(range_match.group(4))
-            values = self._build_range_values(start, end, step)
-            return param, self._normalize_sweep_values(param, values)
-
-        list_match = re.search(
-            rf"\b{param_pattern}\s*=\s*([0-9.,\s]+)",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if not list_match:
-            list_match = re.search(
-                rf"\b{param_pattern}\s+([0-9.,\s]+)",
-                text,
-                flags=re.IGNORECASE,
-            )
-        if list_match:
-            param = list_match.group(1).lower()
-            values = self._parse_float_values(list_match.group(2))
-            return param, self._normalize_sweep_values(param, values)
-
-        return None, []
+        return self._flow_prompt_builder.parse_sweep_values(text)
 
     def _infer_aspect_targets_from_text(self, text: str) -> str | None:
-        if not text:
-            return None
-        lowered = text.lower()
-        # Prefer explicit target-ish phrasing in natural language.
-        patterns = [
-            r"(?:targets?|ratios?)\D{0,24}([0-9xX:]+(?:\s*,\s*[0-9xX:]+)*)",
-            r"(?:output\s+aspect(?:\s+ratio)?(?:\s+adjustment)?(?:\s+of|\s+to)?)\D{0,24}([0-9xX:]+)",
-            r"(?:adjust(?:ment)?\s+to)\D{0,16}([0-9xX:]+)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
-            if match:
-                candidate = (match.group(1) or "").strip()
-                if candidate:
-                    return candidate
-
-        # If user mentions target/aspect and only one ratio exists in the free text,
-        # treat it as the intended target ratio.
-        if any(token in lowered for token in ("target", "aspect", "ratio")):
-            ratios = re.findall(r"\b\d+\s*(?::|x|X)\s*\d+\b", text)
-            unique: list[str] = []
-            for ratio in ratios:
-                normalized = self._normalize_ratio_token(ratio)
-                if normalized and normalized not in unique:
-                    unique.append(normalized)
-            if len(unique) == 1:
-                return unique[0]
-        return None
+        return self._flow_prompt_builder.infer_aspect_targets_from_text(text)
 
     @staticmethod
     def _parse_float_values(raw: str) -> List[float]:
-        if not raw:
-            return []
-        values: List[float] = []
-        for token in re.findall(r"\d*\.?\d+", raw):
-            try:
-                values.append(float(token))
-            except ValueError:
-                continue
-        return values
+        return FlowPromptBuilder.parse_float_values(raw)
 
     @staticmethod
     def _build_range_values(start: float, end: float, step: float) -> List[float]:
-        if step == 0:
-            return []
-        direction = 1.0 if end >= start else -1.0
-        step = abs(step) * direction
-        values: List[float] = []
-        current = start
-        for _ in range(24):
-            if (direction > 0 and current > end + 1e-9) or (direction < 0 and current < end - 1e-9):
-                break
-            values.append(current)
-            current += step
-        return values
+        return FlowPromptBuilder.build_range_values(start, end, step)
 
     @staticmethod
     def _normalize_sweep_values(param: str, values: List[float]) -> List[float]:
-        if not values:
-            return []
-        if param == "steps":
-            normalized = [float(max(1, int(round(value)))) for value in values]
-        elif param == "denoise":
-            normalized = [max(0.0, min(1.0, value)) for value in values]
-        else:
-            normalized = values
-        return normalized[:24]
+        return FlowPromptBuilder.normalize_sweep_values(param, values)
 
-    @staticmethod
     def _build_tanktracks_flow_prompt(
+        self,
         *,
         source_id: str,
         variant_of: str,
         workflow_id: str,
         seed_override: int | None,
+        denoise_override: float | None,
         post_aspect_ratio: str | None,
         run_index: int | None,
         run_count: int | None,
     ) -> str:
-        seed_text = str(seed_override) if seed_override is not None else "use workflow default seed"
-        post_aspect_text = post_aspect_ratio or "none"
-        run_header = (
-            f"Run index: {run_index} of {run_count}\n" if run_index is not None and run_count is not None else ""
-        )
-        if workflow_id == "add_tank_tracks":
-            return (
-                "TANK TRACKS FLOW REQUEST\n"
-                "Run this as a deterministic, minimal-branch flow inside the TUI.\n\n"
-                f"Source catalog image ID: {source_id}\n"
-                f"Requested upload target image ID: {variant_of}\n"
-                f"Workflow preference: {workflow_id}\n"
-                "Prompt behavior: use fixed workflow default prompt (no override)\n\n"
-                + run_header
-                + f"Seed override: {seed_text}\n"
-                + f"Post aspect ratio adjustment: {post_aspect_text}\n\n"
-                "Execution rules (add_tank_tracks fast path):\n"
-                "1. This is a fresh execution request. Always run now; never reuse prior results or previously uploaded image IDs as a substitute.\n"
-                "2. Resolve effective upload parent: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-                "3. Download the source image from Photarium by canonical image ID (not display name).\n"
-                "4. Run workflows_run with an explicit overrides object and wait settings. Use only these override keys:\n"
-                "   - image: <local_path>\n"
-                "   - filename_prefix: <unique>\n"
-                "   - seed: <seed_override> (include only when Seed override is specified)\n"
-                "   Preflight-check the tool-call JSON before sending: include both workflow_id and overrides.\n"
-                "   Do not set aspect_ratio/custom_* manually; let workflows_run auto-preserve aspect ratio from the input image.\n"
-                "5. Verify output_images; if empty but prompt_id exists, call workflows_watch once before retrying.\n"
-                "6. If Post aspect ratio adjustment is set (for example 4:5), run workflows_run_aspect_ratio_adjustment on the tank-tracks output using a local file path and use that adjusted result as the upload artifact.\n"
-                "7. Download the final artifact (tank-tracks output or post-aspect output) via comfy_download_image and upload to Photarium as a variant of the effective parent image ID.\n"
-                "   On upload, add tags exactly: 'tank tracks', 'caterpillar tracks', 'tracks'. Do not change the image display name (preserve the existing/source-derived display name; do not set it to 'AddTankTracks').\n"
-                "8. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 2.\n"
-                "9. Report the uploaded catalog image ID, effective parent ID, seed used (if any), and auto_aspect_ratio_source/applied_anchor if present (otherwise report the input image ratio from workflows_image_info).\n"
-                "10. Do not call workflows_capabilities_get, workflows_params_get, or tool_schema_get for this flow unless seed override support is unknown and must be verified.\n"
-                "11. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
-            )
-        return (
-            "TANK TRACKS FLOW REQUEST\n"
-            "Run this as an agentic multi-step flow inside the TUI.\n\n"
-            f"Source catalog image ID: {source_id}\n"
-            f"Requested upload target image ID: {variant_of}\n"
-            f"Workflow preference: {workflow_id}\n"
-            "Prompt behavior: use fixed workflow default prompt (no override)\n\n"
-            + run_header
-            + f"Seed override: {seed_text}\n"
-            + f"Post aspect ratio adjustment: {post_aspect_text}\n\n"
-            "Execution rules:\n"
-            "1. This is a fresh execution request. Always run now; never reuse prior results or previously uploaded image IDs as a substitute.\n"
-            "2. Retrieve the source image from Photarium by canonical image ID (not display name).\n"
-            "3. Confirm workflow capability and parameters before execution.\n"
-            "4. Determine source dimensions before running: prefer Photarium width/height metadata; otherwise call workflows_image_info on the downloaded file.\n"
-            "5. Run the selected image-edit workflow against the downloaded image.\n"
-            "6. Preserve source aspect ratio by setting workflow aspect controls to match source ratio (custom_ratio=true, custom_aspect_ratio=W:H, and nearest valid aspect_ratio anchor if required).\n"
-            "7. Use workflow default prompt (do not send prompt override).\n"
-            "8. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-            "9. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 8.\n"
-            "10. Upload the best output image as a variant of the effective parent image ID.\n"
-            "   On upload, add tags exactly: 'tank tracks', 'caterpillar tracks', 'tracks'. Do not change the image display name (preserve the existing/source-derived display name; do not set it to 'AddTankTracks').\n"
-            "11. Report the uploaded catalog image ID, effective parent ID, source ratio used, and concise tool-call trace.\n"
-            "12. If Seed override is specified and the workflow supports a seed parameter, include it explicitly in overrides.\n"
-            "13. If Post aspect ratio adjustment is specified, apply workflows_run_aspect_ratio_adjustment after the image-edit workflow and upload the adjusted output.\n"
-            "14. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+        return self._flow_prompt_builder.build_tanktracks_flow_prompt(
+            source_id=source_id,
+            variant_of=variant_of,
+            workflow_id=workflow_id,
+            seed_override=seed_override,
+            denoise_override=denoise_override,
+            post_aspect_ratio=post_aspect_ratio,
+            run_index=run_index,
+            run_count=run_count,
         )
 
-    @staticmethod
     def _build_variation_flow_prompt(
+        self,
         *,
         source_id: str,
         variant_of: str,
@@ -2210,66 +1018,21 @@ class ChatApp(App):
         seed_values: List[int] | None,
         extra_instructions: str | None,
     ) -> str:
-        analysis_text = analysis_prompt or "use workflow default image_analysis_instructions"
-        if upscale is None:
-            upscale_text = "not specified"
-        else:
-            upscale_text = "enabled" if upscale else "disabled"
-        if run_count:
-            run_count_text = str(run_count)
-        else:
-            run_count_text = "not specified"
-        if sweep_target:
-            sweep_text = sweep_target
-        elif run_count and run_count > 1:
-            sweep_text = "seed (default)"
-        else:
-            sweep_text = "none requested"
-        if sweep_values:
-            sweep_values_text = ", ".join(f"{value:g}" for value in sweep_values)
-        else:
-            sweep_values_text = "none provided"
-        if seed_values:
-            seed_values_text = ", ".join(str(value) for value in seed_values)
-        else:
-            seed_values_text = "none provided"
-        extra_text = extra_instructions or "none"
-        return (
-            "IMAGE VARIATION FLOW REQUEST\n"
-            "Run this as an agentic multi-step flow inside the TUI.\n\n"
-            f"Source catalog image ID: {source_id}\n"
-            f"Requested upload target image ID: {variant_of}\n"
-            f"Workflow preference: {workflow_id}\n"
-            f"Image analysis prompt: {analysis_text}\n"
-            f"Upscale request: {upscale_text}\n"
-            f"Requested run count: {run_count_text}\n"
-            f"Sweep target: {sweep_text}\n"
-            f"Sweep values: {sweep_values_text}\n"
-            f"Seed sweep values (randomized): {seed_values_text}\n"
-            f"Additional variation instructions: {extra_text}\n\n"
-            "Execution rules:\n"
-            "1. Retrieve the source image from Photarium by canonical image ID (not display name).\n"
-            "2. Confirm workflow capability and parameters with workflows_params_get before execution.\n"
-            "3. Download the image locally and pass the local path to the workflow image input.\n"
-            "4. If an image analysis prompt is provided, map it to the workflow's image_analysis_instructions (or the Griptape STRING input) and keep all other defaults.\n"
-            "5. If upscale is requested and the workflow exposes an upscale toggle or method (for example upscale, upscale_method, megapixels, resolution_steps), enable it and state the chosen values. If no upscale controls exist, proceed without upscaling and report that limitation.\n"
-            "6. If run count >1, run multiple jobs. Default sweep is different seeds unless a sweep target is specified; keep non-swept overrides fixed.\n"
-            "   For seed sweeps, use non-deterministic random seeds per run (never fixed sequences like 111111, 222222). If randomized seed values are provided in this request, use them as authoritative.\n"
-            "7. If sweep values are provided, run once per value in order (or truncate to run_count if smaller); treat them as authoritative for the sweep target.\n"
-            "8. If sweep target is prompt/image_analysis_instructions, generate one augmented prompt per run from the base analysis prompt (or workflow default) and keep other overrides fixed.\n"
-            "9. If sweep target is denoise/cfg/guidance/strength/steps, vary only that parameter across runs; keep prompts and seeds fixed unless seeds are the sweep target.\n"
-            "10. Run workflows_run with an explicit overrides object and a unique filename_prefix per run.\n"
-            "    Preflight-check each workflows_run call payload before sending: it must include workflow_id and overrides (never omit overrides).\n"
-            "    If doing a sweep (especially seed sweep), verify the swept parameter is explicitly present in each run's overrides and actually differs across runs; varying only filename_prefix is a mistake.\n"
-            "11. Resolve effective upload parent before uploading: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-            "12. Upload all successful outputs as Photarium variants of the effective parent image ID (do not choose a single 'best' output).\n"
-            "13. Update Photarium prompt metadata for each uploaded image: prefer the resolved positive prompt for that run; if unavailable, use the image analysis prompt. If the upload tool accepts a prompt field, include it; otherwise call a metadata update tool after upload.\n"
-            "14. Report uploaded catalog image IDs, effective parent ID, prompt used, and concise tool-call trace. Include run index / actual swept override value -> image_id mapping for multi-run requests.\n"
-            "15. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+        return self._flow_prompt_builder.build_variation_flow_prompt(
+            source_id=source_id,
+            variant_of=variant_of,
+            workflow_id=workflow_id,
+            analysis_prompt=analysis_prompt,
+            upscale=upscale,
+            run_count=run_count,
+            sweep_target=sweep_target,
+            sweep_values=sweep_values,
+            seed_values=seed_values,
+            extra_instructions=extra_instructions,
         )
 
-    @staticmethod
     def _build_import_workflow_flow_prompt(
+        self,
         *,
         image_id: str,
         workflow_id: str,
@@ -2278,29 +1041,17 @@ class ChatApp(App):
         description: str | None,
         photarium_mcp_url: str,
     ) -> str:
-        desc_text = description or f"Imported from Photarium image {image_id}"
-        tags_text = ", ".join(tags) if tags else "photarium, imported"
-        return (
-            "IMPORT WORKFLOW FLOW REQUEST\n"
-            "Run this as an agentic shortcut flow inside the TUI.\n\n"
-            f"Source Photarium image ID: {image_id}\n"
-            f"Target workflow_id: {workflow_id}\n"
-            f"Workflow display name: {workflow_name}\n"
-            f"Workflow tags: {tags_text}\n"
-            f"Workflow description hint: {desc_text}\n"
-            f"Photarium MCP URL: {photarium_mcp_url}\n\n"
-            "Execution rules:\n"
-            "1. Call workflows_import_from_photarium with image_id, workflow_id, photarium_mcp_url, name, tags, and hints.description.\n"
-            "2. Keep include_suggestions=true and prefer_prompt=true unless a hard failure requires retry.\n"
-            "3. If import fails because embedded workflow is missing, report that clearly and stop.\n"
-            "4. On success, verify with workflows_get and workflows_params_get for the new workflow_id.\n"
-            "5. Confirm packaged sidecars exist (workflow.json, meta.json, params.json) via the workflow tool results.\n"
-            "6. Return concise summary: workflow_id, source image_id, params_count, and any notable packaging warnings.\n"
-            "7. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+        return self._flow_prompt_builder.build_import_workflow_flow_prompt(
+            image_id=image_id,
+            workflow_id=workflow_id,
+            workflow_name=workflow_name,
+            tags=tags,
+            description=description,
+            photarium_mcp_url=photarium_mcp_url,
         )
 
-    @staticmethod
     def _build_imageedit_flow_prompt(
+        self,
         *,
         source_id: str,
         variant_of: str,
@@ -2312,37 +1063,16 @@ class ChatApp(App):
         run_index: int | None,
         run_count: int | None,
     ) -> str:
-        analysis_text = analysis_prompt or "infer image-analysis/conditioning guidance from the edit request if the workflow supports it"
-        seed_text = str(seed_override) if seed_override is not None else "use workflow default seed"
-        post_aspect_text = post_aspect_ratio or "none"
-        run_header = (
-            f"Run index: {run_index} of {run_count}\n" if run_index is not None and run_count is not None else ""
-        )
-        return (
-            "IMAGE EDIT FLOW REQUEST\n"
-            "Run this as an agentic image-edit flow inside the TUI.\n\n"
-            f"Source catalog image ID: {source_id}\n"
-            f"Requested upload target image ID: {variant_of}\n"
-            f"Workflow preference: {workflow_id}\n"
-            f"Edit request: {edit_request}\n"
-            f"Analysis prompt (optional): {analysis_text}\n"
-            + run_header
-            + f"Seed override: {seed_text}\n"
-            + f"Post aspect ratio adjustment: {post_aspect_text}\n\n"
-            "Execution rules:\n"
-            "1. Resolve effective upload parent: call photarium_get on the source image; if source has parent_id, use that parent_id, otherwise use source image ID.\n"
-            "2. Download the source image from Photarium by canonical image ID.\n"
-            "3. Inspect workflow parameters with workflows_params_get (and workflows_capabilities_get if needed) to map the edit request to valid overrides.\n"
-            "4. Run workflows_run with an explicit overrides object. Always include the image input as a local file path and preserve aspect ratio unless the user explicitly asks to change framing.\n"
-            "   If Seed override is specified and the workflow supports a seed parameter, include it explicitly in overrides.\n"
-            "5. Map the natural-language edit request to the best available prompt/instruction fields for the selected workflow.\n"
-            "6. If the workflow has image-analysis or conditioning text fields, use the provided analysis prompt when present; otherwise derive concise guidance from the edit request.\n"
-            "7. Verify output_images; if empty but prompt_id exists, call workflows_watch once before retrying download.\n"
-            "8. If Post aspect ratio adjustment is specified, run workflows_run_aspect_ratio_adjustment on the image-edit output using a local file path and use the adjusted result as the upload artifact.\n"
-            "9. Download the final artifact (image-edit output or post-aspect output) via comfy_download_image and upload it to Photarium as a variant of the effective parent image ID.\n"
-            "10. If upload to requested target fails parent/variant validation, retry once using the resolved effective parent from step 1.\n"
-            "11. Report the uploaded catalog image ID, effective parent ID, workflow used, seed used (if any), and the exact overrides sent to workflows_run (sanitized paths are okay).\n"
-            "12. Do not ask for CLI scripts or manual user steps; complete with available MCP tools.\n"
+        return self._flow_prompt_builder.build_imageedit_flow_prompt(
+            source_id=source_id,
+            variant_of=variant_of,
+            workflow_id=workflow_id,
+            edit_request=edit_request,
+            analysis_prompt=analysis_prompt,
+            seed_override=seed_override,
+            post_aspect_ratio=post_aspect_ratio,
+            run_index=run_index,
+            run_count=run_count,
         )
 
     def _record_prompt_history(self, prompt: str) -> None:
@@ -2399,6 +1129,10 @@ class ChatApp(App):
             f"- strict_tool_facts: {self._config.strict_tool_facts}",
             f"- strict_tool_facts: {self._config.strict_tool_facts}",
         )
+        self._write_chat(
+            f"- response_verbosity: {self._response_verbosity}",
+            f"- response_verbosity: {self._response_verbosity}",
+        )
         self._write_chat(f"- discovered tools: {len(self._tools)}", f"- discovered tools: {len(self._tools)}")
         self._write_chat(
             f"- conversation messages: {stats['message_count']} (chars={stats['total_content_chars']})",
@@ -2438,18 +1172,50 @@ class ChatApp(App):
         self._chat_history.clear()
         self._tool_history.clear()
         self._orchestrator.reset_conversation()
+        self._apply_runtime_system_prompt()
         self._write_chat(
             "[yellow]Conversation reset. Context cleared.[/yellow]",
             "Conversation reset. Context cleared.",
+        )
+
+    def _apply_runtime_system_prompt(self) -> None:
+        system_prompt = compose_runtime_system_prompt(self._base_system_prompt, self._response_verbosity)
+        self._orchestrator.set_system_prompt(system_prompt)
+
+    def _set_response_verbosity(self, mode: ResponseVerbosity) -> None:
+        if mode == self._response_verbosity:
+            self._write_chat(
+                f"[dim]EDGAR response mode unchanged: {mode}.[/dim]",
+                f"EDGAR response mode unchanged: {mode}.",
+            )
+            return
+        self._response_verbosity = mode
+        self._apply_runtime_system_prompt()
+        self._save_ui_preferences()
+        self._write_chat(
+            f"[green]EDGAR response mode set to {mode}.[/green]",
+            f"EDGAR response mode set to {mode}.",
         )
 
     async def on_shutdown(self) -> None:
         self._flush_session_log_buffer()
         self._append_session_log("SYSTEM", "Session shutdown.")
         self._flush_session_log_buffer()
-        await self._router.close()
+        close_task = asyncio.create_task(self._router.close())
+        try:
+            await asyncio.shield(close_task)
+        except asyncio.CancelledError:
+            # Finish router teardown even if shutdown cancellation is already in
+            # flight, otherwise stdio async-generator finalizers can emit noisy
+            # unraisable exceptions during loop teardown.
+            try:
+                await close_task
+            except Exception:
+                pass
+        except Exception:
+            pass
 
-    async def _process_message(self, user_text: str) -> None:
+    async def _process_message(self, user_text: str, *, retried_after_tool_not_found: bool = False) -> None:
         self._turn_state = "RUNNING_LLM"
         self._write_chat("[dim]Processing request...[/dim]", "Processing request...")
 
@@ -2504,21 +1270,42 @@ class ChatApp(App):
                 total_count = payload.get("total_count")
                 dropped_count = payload.get("dropped_count")
                 dropped_examples = payload.get("dropped_examples") or []
+                selection_debug = payload.get("selection_debug") or {}
                 examples_text = ""
                 if isinstance(dropped_examples, list) and dropped_examples:
                     preview = ", ".join(str(item) for item in dropped_examples[:4])
                     examples_text = f" dropped examples: {preview}"
+                debug_text = ""
+                if isinstance(selection_debug, dict) and selection_debug:
+                    candidates = selection_debug.get("index_candidate_count")
+                    lexical_matches = selection_debug.get("lexical_match_count")
+                    fallback_added = selection_debug.get("fallback_added_count")
+                    if candidates is not None and lexical_matches is not None and fallback_added is not None:
+                        debug_text = (
+                            f" candidates={candidates}, lexical_matches={lexical_matches},"
+                            f" fallback_added={fallback_added}."
+                        )
                 self._write_chat(
                     (
                         "[dim]Tool window trimmed for API limits: "
                         f"{selected_count}/{total_count} sent "
-                        f"({dropped_count} omitted).{examples_text}[/dim]"
+                        f"({dropped_count} omitted).{debug_text}{examples_text}[/dim]"
                     ),
                     (
                         "Tool window trimmed for API limits: "
                         f"{selected_count}/{total_count} sent "
-                        f"({dropped_count} omitted).{examples_text}"
+                        f"({dropped_count} omitted).{debug_text}{examples_text}"
                     ),
+                )
+            elif kind == "llm_tools_retry_expanded":
+                reason = payload.get("reason") or "unknown"
+                tool_count = payload.get("tool_count")
+                self._write_chat(
+                    (
+                        "[dim]Retrying with expanded tool window "
+                        f"(reason={reason}, tools={tool_count}).[/dim]"
+                    ),
+                    f"Retrying with expanded tool window (reason={reason}, tools={tool_count}).",
                 )
 
             elif kind == "tool_call_start":
@@ -2542,7 +1329,15 @@ class ChatApp(App):
                     self._stop_workflow_progress_monitor()
             elif kind == "tool_call_error":
                 name = payload.get("name", "unknown_tool")
+                error = str(payload.get("error") or "").strip()
                 self._write_tools(f"[red]{name} failed.[/red]", f"{name} failed.")
+                if error:
+                    summary = self._summarize_tool_error(error)
+                    self._write_tools(f"[red]Reason: {summary}[/red]", f"Reason: {summary}")
+                    self._write_chat(
+                        f"[red]{name} failed:[/red] {summary}",
+                        f"{name} failed: {summary}",
+                    )
                 if self._is_progress_monitored_tool(name):
                     self._stop_workflow_progress_monitor()
 
@@ -2575,6 +1370,16 @@ class ChatApp(App):
             for event in tool_events
             if event.name == "editorial_ads_list_inventory" and not event.error
         ]
+        recent_signal_lines = self._build_recent_signals_tool_grounded_lines(user_text, tool_events)
+        if recent_signal_lines and not self._config.strict_tool_facts:
+            self._write_chat(
+                "[bold yellow]Tool-grounded recent signals:[/bold yellow] rendering exact rows from tool JSON.",
+                "Tool-grounded recent signals: rendering exact rows from tool JSON.",
+            )
+            for line in recent_signal_lines:
+                self._write_chat(line, line)
+            return
+
         if editorial_inventory_events and not self._config.strict_tool_facts:
             self._write_chat(
                 "[bold yellow]Tool-grounded editorial inventory listing:[/bold yellow] showing only extant entries from tool output.",
@@ -2624,6 +1429,21 @@ class ChatApp(App):
 
         tool_failures = [event for event in tool_events if event.error]
         tool_successes = [event for event in tool_events if not event.error]
+        if (
+            tool_failures
+            and not tool_successes
+            and not retried_after_tool_not_found
+            and any("Tool not found:" in str(event.error or "") for event in tool_failures)
+        ):
+            self._write_chat(
+                "[yellow]Detected tool registry mismatch. Reconnecting tools and retrying once...[/yellow]",
+                "Detected tool registry mismatch. Reconnecting tools and retrying once...",
+            )
+            reconnected = await self._reconnect_tools(allow_when_busy=True)
+            if reconnected:
+                await self._process_message(user_text, retried_after_tool_not_found=True)
+                return
+
         if tool_failures and not tool_successes:
             self._write_chat(
                 "[red]Tool execution failed:[/red] no successful tool results were produced.",
@@ -2660,6 +1480,16 @@ class ChatApp(App):
     @staticmethod
     def _is_progress_monitored_tool(tool_name: str) -> bool:
         return tool_name in {"workflows_run", "workflows_run_aspect_ratio_adjustment"}
+
+    @staticmethod
+    def _summarize_tool_error(error: str, max_len: int = 320) -> str:
+        text = " ".join(str(error).split())
+        marker = "body="
+        if marker in text:
+            text = text.split(marker, 1)[1].strip() or text
+        if len(text) > max_len:
+            text = text[: max_len - 1] + "…"
+        return text
 
     def _start_workflow_progress_monitor(self) -> None:
         if not isinstance(self._router, HTTPToolRouter):
@@ -2822,96 +1652,19 @@ class ChatApp(App):
         )
 
     def _init_session_log(self) -> None:
-        if self._session_log_path is not None:
-            return
-        logs_dir = Path.cwd() / ".mcp_chat_logs"
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        session_log_path = logs_dir / f"chat_{timestamp}.log"
-        try:
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            header = "\n".join(
-                [
-                    f"Session started: {datetime.now().isoformat(timespec='seconds')}",
-                    f"Model: {self._config.llm.model}",
-                    "===",
-                    "",
-                ]
-            )
-            session_log_path.write_text(header, encoding="utf-8")
-            self._session_log_path = session_log_path
-        except Exception:
-            # Logging should never block chat operation.
-            self._session_log_path = None
+        self._session_log_manager.init_session_log(self)
 
     def _append_session_log(self, channel: str, text: str) -> None:
-        if self._session_log_path is None:
-            return
-        timestamp = datetime.now().isoformat(timespec="seconds")
-        clipped = self._clip_text_for_session_log(text)
-        normalized = clipped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
-        line = f"[{timestamp}] {channel}: {normalized}\n"
-        self._session_log_buffer.append(line)
-        if len(self._session_log_buffer) >= 64:
-            self._flush_session_log_buffer()
-            return
-        if self._session_log_flush_handle is not None:
-            return
-        try:
-            self._session_log_flush_handle = asyncio.get_running_loop().call_later(
-                self._SESSION_LOG_FLUSH_DELAY_S,
-                self._flush_session_log_buffer,
-            )
-        except Exception:
-            self._flush_session_log_buffer()
+        self._session_log_manager.append_session_log(self, channel, text)
 
     def _flush_session_log_buffer(self) -> None:
-        if self._session_log_flush_handle is not None:
-            try:
-                self._session_log_flush_handle.cancel()
-            except Exception:
-                pass
-            self._session_log_flush_handle = None
-        if self._session_log_path is None or not self._session_log_buffer:
-            return
-        payload = "".join(self._session_log_buffer)
-        self._session_log_buffer.clear()
-        try:
-            with self._session_log_path.open("a", encoding="utf-8") as handle:
-                handle.write(payload)
-        except Exception:
-            return
+        self._session_log_manager.flush_session_log_buffer(self)
 
     def _load_ui_preferences(self) -> None:
-        try:
-            payload = json.loads(self._ui_prefs_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
-        raw_height = payload.get("input_height_lines")
-        if isinstance(raw_height, (int, float)):
-            clamped = max(self._MIN_INPUT_HEIGHT, min(self._MAX_INPUT_HEIGHT, int(raw_height)))
-            self._input_height_lines = clamped
-        raw_prompt_history = payload.get("prompt_history")
-        if isinstance(raw_prompt_history, list):
-            normalized: List[str] = []
-            for item in raw_prompt_history:
-                if not isinstance(item, str):
-                    continue
-                text = item.strip()
-                if not text:
-                    continue
-                normalized.append(text)
-            if normalized:
-                self._prompt_history = normalized[-self._PROMPT_HISTORY_MAX :]
+        self._session_log_manager.load_ui_preferences(self)
 
     def _save_ui_preferences(self) -> None:
-        payload = {
-            "input_height_lines": self._input_height_lines,
-            "prompt_history": self._prompt_history[-self._PROMPT_HISTORY_MAX :],
-        }
-        try:
-            self._ui_prefs_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        except Exception:
-            return
+        self._session_log_manager.save_ui_preferences(self)
 
     def _copy_text(self, text: str, label: str) -> None:
         cleaned = _strip_border_glyphs(text)
@@ -3134,6 +1887,56 @@ def _best_effort_terminal_restore() -> None:
         pass
 
 
+def _is_known_stdio_asyncgen_unraisable(unraisable: Any) -> bool:
+    err_msg = getattr(unraisable, "err_msg", "") or ""
+    if "closing of asynchronous generator" not in str(err_msg):
+        return False
+
+    obj = getattr(unraisable, "object", None)
+    try:
+        object_repr = repr(obj)
+    except Exception:
+        object_repr = ""
+    if "stdio_client" not in object_repr:
+        return False
+
+    exc = getattr(unraisable, "exc_value", None)
+    return isinstance(exc, BaseException) and _is_ignorable_stdio_close_error(exc)
+
+
+def _is_known_stdio_asyncgen_shutdown_context(context: Dict[str, Any]) -> bool:
+    message = context.get("message", "") or ""
+    if "closing of asynchronous generator" not in str(message):
+        return False
+
+    asyncgen = context.get("asyncgen")
+    try:
+        asyncgen_repr = repr(asyncgen)
+    except Exception:
+        asyncgen_repr = ""
+    if "stdio_client" not in asyncgen_repr:
+        return False
+
+    exc = context.get("exception")
+    return isinstance(exc, BaseException) and _is_ignorable_stdio_close_error(exc)
+
+
+@contextmanager
+def _suppress_known_stdio_asyncgen_unraisables():
+    previous_hook = sys.unraisablehook
+
+    def _hook(unraisable: Any) -> None:
+        if _is_known_stdio_asyncgen_unraisable(unraisable):
+            return
+        previous_hook(unraisable)
+
+    sys.unraisablehook = _hook
+    try:
+        yield
+    finally:
+        sys.unraisablehook = previous_hook
+
+
 def main() -> None:
     args = _parse_args()
     # Prefer the safer keyboard path by default; advanced kitty protocol can
@@ -3146,7 +1949,8 @@ def main() -> None:
     config = load_config(args.config, model_override=args.model)
     app = ChatApp(config)
     try:
-        app.run(mouse=args.mouse)
+        with _suppress_known_stdio_asyncgen_unraisables():
+            app.run(mouse=args.mouse)
     except KeyboardInterrupt:
         _best_effort_terminal_restore()
         raise

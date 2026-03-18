@@ -109,6 +109,30 @@ _UPLOAD_LABEL_KEY_HINTS: tuple[str, ...] = (
     "slug",
     "immutable",
 )
+_UPLOAD_TAG_KEYS: tuple[str, ...] = (
+    "tags",
+    "tag_names",
+)
+_NON_SEMANTIC_UPLOAD_TAGS: set[str] = {
+    "aspect-ratio",
+    "comfy",
+    "comfyui",
+    "image-edit",
+    "img2img",
+    "sampler",
+    "text-to-image",
+    "text2img",
+    "txt2img",
+    "workflow",
+}
+_NON_SEMANTIC_UPLOAD_TAG_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"cfg|checkpoint|ckpt|clipskip|clip_skip|denoise|guidance|guidance_scale|"
+    r"height|lora|megapixels|model|resolution|resolution_steps|sampler|scheduler|"
+    r"seed|steps|strength|width"
+    r")(?:$|[-_:0-9.].*)",
+    re.IGNORECASE,
+)
 _UPLOAD_STOP_WORDS: set[str] = {
     "a",
     "an",
@@ -277,6 +301,8 @@ def normalize_photarium_upload_arguments(
     if not _is_photarium_upload_tool(tool_name):
         return payload
 
+    payload = _sanitize_upload_tags(payload)
+
     # First, hard-fix any existing label-like fields that accidentally contain
     # URL/query transport blobs (e.g. view_filename=...&type=output...).
     semantic_fallback = _derive_upload_name_candidate(payload, name_key=None)
@@ -332,6 +358,56 @@ def normalize_photarium_upload_arguments(
     payload[name_key] = final_label
     _propagate_upload_label_to_schema_fields(payload, input_schema, final_label)
     return payload
+
+
+def _sanitize_upload_tags(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(arguments)
+    for key in _UPLOAD_TAG_KEYS:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if isinstance(value, list):
+            cleaned = _filter_upload_tag_items(value)
+            if cleaned:
+                payload[key] = cleaned
+            else:
+                payload.pop(key, None)
+        elif isinstance(value, str):
+            cleaned = _filter_upload_tag_items(value.split(","))
+            if cleaned:
+                payload[key] = ", ".join(cleaned)
+            else:
+                payload.pop(key, None)
+    return payload
+
+
+def _filter_upload_tag_items(values: List[Any]) -> List[str]:
+    cleaned: List[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        tag = str(raw).strip()
+        if not tag or _is_non_semantic_upload_tag(tag):
+            continue
+        marker = tag.casefold()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        cleaned.append(tag)
+    return cleaned
+
+
+def _is_non_semantic_upload_tag(tag: str) -> bool:
+    lowered = str(tag or "").strip().casefold()
+    if not lowered:
+        return True
+    if lowered in _NON_SEMANTIC_UPLOAD_TAGS:
+        return True
+    if _NON_SEMANTIC_UPLOAD_TAG_PREFIX_RE.match(lowered):
+        return True
+    compact = re.sub(r"\s+", "-", lowered)
+    if compact in _NON_SEMANTIC_UPLOAD_TAGS:
+        return True
+    return False
 
 
 def semantic_color_to_hex(value: str) -> str | None:
