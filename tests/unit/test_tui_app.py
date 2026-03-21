@@ -393,6 +393,28 @@ def test_config_parse_rejects_stdio_server_without_command(tmp_path):
         load_config(cfg_file)
 
 
+def test_config_parse_rejects_stdio_server_with_http_enabled_env(tmp_path):
+    from comfy_mcp.tui_client.config import load_config
+
+    payload = """
+{
+  "llm": {"base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","model":"gpt-4o-mini"},
+  "servers": [
+    {
+      "name":"editorial",
+      "transport":"stdio",
+      "command":"/Users/julian/Code/nfl-editorial/run_editorial_mcp_server.sh",
+      "env":{"EDITORIAL_HTTP_ENABLED":"true"}
+    }
+  ]
+}
+"""
+    cfg_file = tmp_path / "cfg.json"
+    cfg_file.write_text(payload)
+    with pytest.raises(ValueError, match="enables HTTP via env"):
+        load_config(cfg_file)
+
+
 def test_config_appends_prompt_policies(tmp_path):
     from comfy_mcp.tui_client.config import load_config
 

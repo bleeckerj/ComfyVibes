@@ -281,11 +281,23 @@ def _parse_server(raw: Dict[str, Any]) -> ServerConfig:
     )
 
 
+def _is_truthy_env_value(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _validate_server(server: ServerConfig) -> None:
     if server.transport == "stdio":
         if not server.command.strip():
             raise ValueError(
                 f"Server '{server.name}' uses stdio transport but has no command configured."
+            )
+        http_enable_keys = [
+            key for key, value in server.env.items() if key.endswith("_HTTP_ENABLED") and _is_truthy_env_value(value)
+        ]
+        if http_enable_keys:
+            keys = ", ".join(sorted(http_enable_keys))
+            raise ValueError(
+                f"Server '{server.name}' uses stdio transport but enables HTTP via env ({keys})."
             )
         return
     if not (server.http_url or "").strip():

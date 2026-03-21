@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Protocol
@@ -504,6 +505,12 @@ class ChatOrchestrator:
 
     @classmethod
     def _match_strict_command(cls, user_text: str) -> StrictCommand | None:
+        normalized_text = str(user_text or "")
+        if (
+            "TANK TRACKS FLOW REQUEST" in normalized_text.upper()
+            and "Run this as a deterministic, minimal-branch flow inside the TUI." in normalized_text
+        ):
+            return StrictCommand(kind="tanktracks_flow", target=user_text)
         match = cls._STRICT_PREVIEW_AD_RE.match(user_text or "")
         if not match:
             return None
@@ -526,6 +533,14 @@ class ChatOrchestrator:
         on_progress: Callable[[str, Dict[str, Any]], None] | None,
         stop_after_tool_calls: bool,
     ) -> tuple[str | None, List[ToolEvent]]:
+        if command.kind == "tanktracks_flow":
+            return await self._execute_strict_tanktracks_flow(
+                command,
+                user_text=user_text,
+                tool_events=tool_events,
+                on_progress=on_progress,
+                stop_after_tool_calls=stop_after_tool_calls,
+            )
         if command.kind == "preview_ad":
             return await self._execute_strict_preview_ad(
                 command,
@@ -539,6 +554,258 @@ class ChatOrchestrator:
         if on_progress:
             on_progress("complete", {"assistant_text": message, "strict_command": command.kind})
         return message, tool_events
+
+    async def _execute_strict_tanktracks_flow(
+        self,
+        command: StrictCommand,
+        *,
+        user_text: str,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+        stop_after_tool_calls: bool,
+    ) -> tuple[str | None, List[ToolEvent]]:
+        del user_text
+        request_text = command.target or ""
+        source_image_id = self._extract_flow_source_image_id(request_text)
+        if not source_image_id:
+            message = "Tanktracks flow failed: missing source image ID."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+
+        workflow_id = self._extract_flow_workflow_id(request_text) or "add_tank_tracks"
+        upload_target_id = self._extract_tanktracks_upload_target_id(request_text) or source_image_id
+        seed_override = self._extract_tanktracks_seed_override(request_text)
+        denoise_override = self._extract_tanktracks_denoise_override(request_text)
+
+        if "workflows_run" not in self._tool_input_schema_by_name:
+            message = "Tanktracks flow failed: workflows_run is not exposed."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+
+        source_metadata = await self._fetch_source_image_metadata_strict(
+            source_image_id,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        effective_parent_id = upload_target_id
+        if isinstance(source_metadata, dict):
+            self._record_image_namespaces_from_result(source_metadata)
+            effective_parent_id = self._binary_transfer_adapter.resolve_effective_parent_id(
+                source_metadata,
+                fallback_source_image_id=source_image_id,
+            )
+        source_namespace = ""
+        if isinstance(source_metadata, dict):
+            source_namespace = (
+                self._binary_transfer_adapter._first_non_empty_string(source_metadata, "namespace") or ""
+            )
+
+        local_source_path = await self._download_source_image_strict(
+            source_image_id,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        if not local_source_path:
+            message = f"Tanktracks flow failed: could not download source image {source_image_id}."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+        self._record_source_image_local_path(local_source_path, source_image_id)
+
+        workflow_arguments: Dict[str, Any] = {
+            "workflow_id": workflow_id,
+            "overrides": {
+                "image": local_source_path,
+                "filename_prefix": f"AddTankTracks_{uuid.uuid4().hex[:8]}",
+            },
+            "wait_timeout_s": 300,
+            "wait_poll_ms": 1000,
+        }
+        if seed_override is not None:
+            workflow_arguments["overrides"]["seed"] = seed_override
+        if denoise_override is not None:
+            workflow_arguments["overrides"]["denoise"] = denoise_override
+
+        workflow_result = await self._run_prepared_strict_tool_call(
+            "workflows_run",
+            workflow_arguments,
+            user_text=request_text,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        output_images = workflow_result.get("output_images") if isinstance(workflow_result, dict) else None
+        if (not isinstance(output_images, list) or not output_images) and isinstance(workflow_result, dict):
+            watched = await self._watch_workflow_outputs_if_needed(
+                workflow_result,
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+            if isinstance(watched, dict):
+                workflow_result = watched
+                output_images = workflow_result.get("output_images")
+        if (
+            isinstance(workflow_result, dict)
+            and (not isinstance(output_images, list) or not output_images)
+            and self._should_retry_workflow_without_outputs(workflow_result)
+        ):
+            retry_arguments = dict(workflow_arguments)
+            retry_arguments["force"] = True
+            retry_result = await self._run_prepared_strict_tool_call(
+                "workflows_run",
+                retry_arguments,
+                user_text=request_text,
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+            retry_output_images = retry_result.get("output_images") if isinstance(retry_result, dict) else None
+            if (not isinstance(retry_output_images, list) or not retry_output_images) and isinstance(retry_result, dict):
+                watched_retry = await self._watch_workflow_outputs_if_needed(
+                    retry_result,
+                    tool_events=tool_events,
+                    on_progress=on_progress,
+                )
+                if isinstance(watched_retry, dict):
+                    retry_result = watched_retry
+                    retry_output_images = retry_result.get("output_images")
+            workflow_result = retry_result
+            output_images = retry_output_images
+        if not isinstance(output_images, list) or not output_images:
+            message = "Tanktracks flow failed: workflows_run returned no output_images."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+
+        final_image_payload = output_images[0] if isinstance(output_images[0], dict) else None
+        if not isinstance(final_image_payload, dict):
+            message = "Tanktracks flow failed: invalid output image payload."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+
+        upload_tool = self._select_auto_upload_tool_name()
+        if not upload_tool:
+            message = "Tanktracks flow failed: Photarium upload tool is unavailable."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+        upload_schema = self._tool_input_schema_by_name.get(upload_tool)
+        upload_path_key = self._select_upload_local_path_key(upload_schema)
+        if not upload_path_key:
+            message = f"Tanktracks flow failed: upload tool {upload_tool} has no local-path parameter."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+        local_output_path, _path_source = await self._resolve_output_image_local_path(final_image_payload)
+        if not local_output_path:
+            message = "Tanktracks flow failed: could not resolve the generated output file."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "tanktracks_flow"})
+            return message, tool_events
+
+        upload_arguments: Dict[str, Any] = {upload_path_key: local_output_path}
+        filename = str(final_image_payload.get("filename") or "").strip()
+        stem = self._safe_filename_stem(Path(filename).stem if filename else Path(local_output_path).stem)
+        if self._schema_has_property(upload_schema, "name"):
+            upload_arguments["name"] = stem
+        if self._schema_has_property(upload_schema, "title"):
+            upload_arguments["title"] = stem
+        if self._schema_has_property(upload_schema, "namespace"):
+            upload_arguments["namespace"] = source_namespace or "cf-default"
+        parent_key = self._binary_transfer_adapter.select_parent_id_key(upload_schema)
+        if parent_key and effective_parent_id:
+            upload_arguments[parent_key] = effective_parent_id
+        upload_arguments = self._binary_transfer_adapter.apply_tanktracks_upload_conventions(
+            upload_tool,
+            upload_arguments,
+            user_text=request_text,
+        )
+        upload_result = await self._run_strict_tool_call(
+            upload_tool,
+            upload_arguments,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        uploaded_image_id = None
+        if isinstance(upload_result, dict):
+            uploaded_image_id = self._extract_image_id(upload_result)
+
+        message = (
+            f"Tanktracks flow completed. Uploaded image ID: {uploaded_image_id or 'unknown'}. "
+            f"Effective parent ID: {effective_parent_id}."
+        )
+        self._append_message({"role": "assistant", "content": message})
+        if on_progress:
+            on_progress("complete", {"assistant_text": None if stop_after_tool_calls else message, "strict_command": "tanktracks_flow"})
+        return (None if stop_after_tool_calls else message), tool_events
+
+    async def _fetch_source_image_metadata_strict(
+        self,
+        source_image_id: str,
+        *,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+    ) -> Dict[str, Any] | None:
+        for tool_name in ("photarium_get", "catalog_get"):
+            if tool_name not in self._tool_input_schema_by_name:
+                continue
+            schema = self._tool_input_schema_by_name.get(tool_name)
+            image_id_key = self._binary_transfer_adapter.select_source_image_id_key(schema)
+            if not image_id_key:
+                continue
+            result = await self._run_strict_tool_call(
+                tool_name,
+                {image_id_key: source_image_id},
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+            if isinstance(result, dict) and not result.get("error"):
+                return result
+        return None
+
+    async def _download_source_image_strict(
+        self,
+        source_image_id: str,
+        *,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+    ) -> str | None:
+        tool_name = self._select_variation_download_tool()
+        if not tool_name:
+            return None
+        schema = self._tool_input_schema_by_name.get(tool_name)
+        image_id_key = self._select_download_image_id_key(schema)
+        if not image_id_key:
+            return None
+        save_path_key = self._select_download_save_path_key(schema)
+        include_base64_key = self._select_download_include_base64_key(schema)
+        safe_stem = re.sub(r"[^A-Za-z0-9]+", "", source_image_id)[:24] or "VariationSource"
+        requested_path: Path | None = None
+        payload: Dict[str, Any] = {image_id_key: source_image_id}
+        if save_path_key:
+            requested_path = Path("/tmp") / f"{safe_stem}_{uuid.uuid4().hex[:8]}.png"
+            payload[save_path_key] = str(requested_path)
+        if include_base64_key:
+            payload[include_base64_key] = False
+        result = await self._run_strict_tool_call(
+            tool_name,
+            payload,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        resolved = self._resolve_downloaded_file_path(result, requested_path=requested_path)
+        if resolved:
+            self._record_source_image_local_path(resolved, source_image_id)
+        return resolved
 
     async def _execute_strict_preview_ad(
         self,
@@ -701,6 +968,192 @@ class ChatOrchestrator:
             }
         )
         return result
+
+    async def _run_prepared_strict_tool_call(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        user_text: str,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+    ) -> Any:
+        call_id = f"strict_{tool_name}_{len(tool_events) + 1}"
+        self._append_message(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": self._safe_json_dumps(arguments),
+                        },
+                    }
+                ],
+            }
+        )
+        if on_progress:
+            on_progress("tool_call_start", {"name": tool_name, "arguments": arguments})
+        event = ToolEvent(name=tool_name, arguments=dict(arguments))
+        temp_upload_file: Path | None = None
+        try:
+            execute_name, execute_arguments, temp_upload_file = await self._prepare_tool_execution(
+                tool_name,
+                arguments,
+                user_text=user_text,
+            )
+            event.arguments = execute_arguments
+            async with self._tool_execution_lock:
+                raw_result = await self._router.call_tool(execute_name, execute_arguments)
+            result = normalize_search_tool_result(tool_name, raw_result)
+            self._record_image_namespaces_from_result(result)
+            event.result = result
+            if on_progress:
+                on_progress("tool_call_result", {"name": tool_name, "result": result})
+        except Exception as exc:  # pragma: no cover
+            event.error = str(exc)
+            result = {"error": event.error}
+            if on_progress:
+                on_progress("tool_call_error", {"name": tool_name, "error": event.error})
+        finally:
+            if temp_upload_file is not None:
+                try:
+                    temp_upload_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        tool_events.append(event)
+        sanitized = sanitize_result(result, tool_name=tool_name, save_artifacts=True)
+        sanitized = self._compact_tool_result_for_llm(tool_name, sanitized)
+        self._append_message(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": tool_name,
+                "content": self._safe_json_dumps(sanitized, separators=(",", ":")),
+            }
+        )
+        return result
+
+    async def _watch_workflow_outputs_if_needed(
+        self,
+        workflow_result: Dict[str, Any],
+        *,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+    ) -> Dict[str, Any] | None:
+        prompt_id = str(workflow_result.get("prompt_id") or "").strip()
+        if not prompt_id:
+            return None
+        if "workflows_watch" in self._tool_input_schema_by_name:
+            watched = await self._run_strict_tool_call(
+                "workflows_watch",
+                {"prompt_id": prompt_id, "inactivity_timeout_s": 300, "include_history": True},
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+            extracted = self._extract_workflow_outputs_from_watch_payload(watched, prompt_id=prompt_id)
+            if isinstance(extracted, dict) and isinstance(extracted.get("output_images"), list) and extracted.get("output_images"):
+                return extracted
+        if "workflows_wait" in self._tool_input_schema_by_name:
+            waited = await self._run_strict_tool_call(
+                "workflows_wait",
+                {"prompt_id": prompt_id, "timeout_s": 300, "poll_ms": 1000},
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+            extracted = self._extract_workflow_outputs_from_watch_payload(waited, prompt_id=prompt_id)
+            if isinstance(extracted, dict) and isinstance(extracted.get("output_images"), list) and extracted.get("output_images"):
+                return extracted
+        return None
+
+    @staticmethod
+    def _should_retry_workflow_without_outputs(workflow_result: Dict[str, Any]) -> bool:
+        if not isinstance(workflow_result, dict):
+            return False
+        if workflow_result.get("likely_cached") is True:
+            return True
+        status = str(workflow_result.get("status") or "").strip().lower()
+        message = str(workflow_result.get("message") or "").strip().lower()
+        if status == "complete" and ("no output image records" in message or "no output images" in message):
+            return True
+        return False
+
+    @staticmethod
+    def _extract_workflow_outputs_from_watch_payload(payload: Any, *, prompt_id: str) -> Dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        if isinstance(payload.get("output_images"), list) and payload.get("output_images"):
+            return payload
+        history = payload.get("history")
+        if not isinstance(history, dict):
+            return None
+        prompt_data = history.get(prompt_id, history)
+        if not isinstance(prompt_data, dict):
+            return None
+        outputs = prompt_data.get("outputs")
+        if not isinstance(outputs, dict):
+            return None
+        output_images: list[Dict[str, Any]] = []
+        for node_out in outputs.values():
+            if not isinstance(node_out, dict):
+                continue
+            images = node_out.get("images")
+            if not isinstance(images, list):
+                continue
+            for image in images:
+                if not isinstance(image, dict):
+                    continue
+                filename = str(image.get("filename") or "").strip()
+                if not filename:
+                    continue
+                entry: Dict[str, Any] = {
+                    "filename": filename,
+                    "subfolder": str(image.get("subfolder") or "").strip(),
+                    "type": str(image.get("type") or "output").strip() or "output",
+                }
+                output_images.append(entry)
+        if not output_images:
+            return None
+        merged = dict(payload)
+        merged["prompt_id"] = prompt_id
+        merged["output_images"] = output_images
+        return merged
+
+    @staticmethod
+    def _extract_tanktracks_upload_target_id(request_text: str) -> str | None:
+        match = re.search(r"Requested upload target image ID:\s*([A-Za-z0-9-]{8,})", request_text, re.I)
+        if not match:
+            return None
+        return match.group(1).strip()
+
+    @staticmethod
+    def _extract_tanktracks_seed_override(request_text: str) -> int | None:
+        match = re.search(r"Seed override:\s*(.+)", request_text, re.I)
+        if not match:
+            return None
+        value = match.group(1).strip()
+        if not value or value.lower().startswith("use workflow default"):
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_tanktracks_denoise_override(request_text: str) -> float | None:
+        match = re.search(r"Denoise override:\s*(.+)", request_text, re.I)
+        if not match:
+            return None
+        value = match.group(1).strip()
+        if not value or value.lower().startswith("use workflow default"):
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
 
     @staticmethod
     def _extract_preview_url(result: Any) -> str | None:

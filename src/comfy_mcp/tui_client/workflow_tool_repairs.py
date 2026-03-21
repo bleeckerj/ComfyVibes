@@ -311,18 +311,22 @@ class WorkflowToolRepairService:
     ) -> Dict[str, Any]:
         if tool_name != "workflows_run" or not isinstance(arguments, dict):
             return arguments
-        if "TANK TRACKS FLOW REQUEST" not in str(user_text or "").upper():
-            return arguments
         repaired = dict(arguments)
         workflow_id = str(repaired.get("workflow_id") or "").strip()
+        marker_present = "TANK TRACKS FLOW REQUEST" in str(user_text or "").upper()
         if not workflow_id:
             inferred_workflow = self.extract_flow_workflow_id(user_text)
             if inferred_workflow:
                 workflow_id = inferred_workflow
                 repaired["workflow_id"] = inferred_workflow
+        if not workflow_id and self.is_tanktracks_command_text(user_text):
+            workflow_id = "add_tank_tracks"
+            repaired["workflow_id"] = workflow_id
         if not workflow_id:
             workflow_id = "add_tank_tracks"
             repaired["workflow_id"] = workflow_id
+        if workflow_id != "add_tank_tracks" and not marker_present:
+            return repaired
         if workflow_id != "add_tank_tracks":
             return repaired
         existing_overrides = repaired.get("overrides")
@@ -799,9 +803,15 @@ class WorkflowToolRepairService:
         if not isinstance(user_text, str):
             return None
         match = re.search(r"Source catalog image ID:\s*([A-Za-z0-9-]{8,})", user_text, re.I)
-        if not match:
-            return None
-        return match.group(1).strip()
+        if match:
+            return match.group(1).strip()
+        command_match = re.search(r"(?:^|\n)\s*/tanktracks?\s+([A-Za-z0-9-]{8,})", user_text, re.I)
+        if command_match:
+            return command_match.group(1).strip()
+        uuid_match = re.search(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", user_text, re.I)
+        if uuid_match:
+            return uuid_match.group(0).strip()
+        return None
 
     @staticmethod
     def extract_flow_workflow_id(user_text: str) -> str | None:
@@ -809,5 +819,13 @@ class WorkflowToolRepairService:
             return None
         match = re.search(r"Workflow preference:\s*([A-Za-z0-9._-]+)", user_text, re.I)
         if not match:
+            match = re.search(r"(?:^|\s)workflow\s*=\s*([A-Za-z0-9._-]+)(?=\s|$)", user_text, re.I)
+        if not match:
             return None
         return match.group(1).strip()
+
+    @staticmethod
+    def is_tanktracks_command_text(user_text: str) -> bool:
+        if not isinstance(user_text, str):
+            return False
+        return bool(re.search(r"(?:^|\n)\s*/tanktracks?\b", user_text, re.I))

@@ -1826,6 +1826,384 @@ async def test_orchestrator_repairs_tanktracks_workflows_run_missing_overrides_w
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_repairs_raw_tanktracks_command_missing_overrides_with_download():
+    llm = MissingOverridesTankTracksWorkflowRunLLM()
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_download_image":
+                return {"savedPath": "/tmp/tanktracks_source.png"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                            "wait_poll_ms": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("/tanktracks 44a4417e-662f-4275-413a-9dba9a6de200")
+
+    assert answer == "done"
+    assert len(events) == 1
+    assert events[0].name == "workflows_run"
+    assert events[0].error is None
+    assert events[0].arguments["workflow_id"] == "add_tank_tracks"
+    assert events[0].arguments["overrides"]["image"] == "/tmp/tanktracks_source.png"
+    assert isinstance(events[0].arguments["overrides"]["filename_prefix"], str)
+    assert router.calls[0][0] == "photarium_download_image"
+    assert router.calls[1][0] == "workflows_run"
+
+
+@pytest.mark.asyncio
+async def test_strict_tanktracks_flow_bypasses_llm_and_runs_tools_directly():
+    @dataclass
+    class _LLM:
+        calls: int = 0
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            return LLMResponse(content="should not be called", tool_calls=[])
+
+        async def chat_stream(self, messages, tools, on_token=None):
+            self.calls += 1
+            return LLMResponse(content="should not be called", tool_calls=[])
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_get":
+                return {
+                    "imageId": "44a4417e-662f-4275-413a-9dba9a6de200",
+                    "parentId": "deaf6608-6cfc-45dd-abb8-559833291800",
+                    "namespace": "cf-default",
+                }
+            if name == "photarium_download_image":
+                return {"savedPath": "/tmp/tanktracks_source.png"}
+            if name == "workflows_run":
+                return {
+                    "output_images": [
+                        {
+                            "filename": "AddTankTracks_result.png",
+                            "local_path": "/tmp/AddTankTracks_result.png",
+                        }
+                    ]
+                }
+            if name == "photarium_upload_from_path":
+                return {"imageId": "uploaded-123", "parentId": payload.get("parentId")}
+            return {"ok": True}
+
+    llm = _LLM()
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {"type": "object", "properties": {"imageId": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                            "wait_poll_ms": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "parentId": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tags": {"type": "array"},
+                            "namespace": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process(
+        "TANK TRACKS FLOW REQUEST\n"
+        "Run this as a deterministic, minimal-branch flow inside the TUI.\n\n"
+        "Source catalog image ID: 44a4417e-662f-4275-413a-9dba9a6de200\n"
+        "Requested upload target image ID: 44a4417e-662f-4275-413a-9dba9a6de200\n"
+        "Workflow preference: add_tank_tracks\n"
+        "Seed override: use workflow default seed\n"
+        "Denoise override: use workflow default denoise\n"
+        "Post aspect ratio adjustment: none\n"
+    )
+
+    assert llm.calls == 0
+    assert "uploaded-123" in answer
+    assert len(events) == 4
+    assert [event.name for event in events] == [
+        "photarium_get",
+        "photarium_download_image",
+        "workflows_run",
+        "photarium_upload_from_path",
+    ]
+    assert router.calls[0][0] == "photarium_get"
+    assert router.calls[1][0] == "photarium_download_image"
+    assert router.calls[2][0] == "workflows_run"
+    assert router.calls[3][0] == "photarium_upload_from_path"
+    assert router.calls[3][1]["parentId"] == "deaf6608-6cfc-45dd-abb8-559833291800"
+    assert router.calls[3][1]["tags"] == ["tank tracks", "caterpillar tracks", "tracks"]
+
+
+@pytest.mark.asyncio
+async def test_strict_tanktracks_flow_extracts_outputs_from_watch_history():
+    @dataclass
+    class _LLM:
+        calls: int = 0
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            return LLMResponse(content="should not be called", tool_calls=[])
+
+        async def chat_stream(self, messages, tools, on_token=None):
+            self.calls += 1
+            return LLMResponse(content="should not be called", tool_calls=[])
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_get":
+                return {
+                    "imageId": "44a4417e-662f-4275-413a-9dba9a6de200",
+                    "parentId": "deaf6608-6cfc-45dd-abb8-559833291800",
+                    "namespace": "cf-default",
+                }
+            if name == "photarium_download_image":
+                return {"savedPath": "/tmp/tanktracks_source.png"}
+            if name == "workflows_run":
+                return {"status": "complete", "prompt_id": "abc123", "output_images": []}
+            if name == "workflows_watch":
+                return {
+                    "status": "complete",
+                    "prompt_id": "abc123",
+                    "history": {
+                        "abc123": {
+                            "outputs": {
+                                "79": {
+                                    "images": [
+                                        {
+                                            "filename": "AddTankTracks_watch.png",
+                                            "subfolder": "2026-03-20",
+                                            "type": "output",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                }
+            if name == "comfy_download_image":
+                return {"savedPath": "/tmp/AddTankTracks_watch.png"}
+            if name == "photarium_upload_from_path":
+                return {"imageId": "uploaded-watch", "parentId": payload.get("parentId")}
+            return {"ok": True}
+
+    llm = _LLM()
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {"type": "object", "properties": {"imageId": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                            "wait_poll_ms": {"type": "integer"},
+                            "force": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_watch",
+                    "description": "Watch workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "prompt_id": {"type": "string"},
+                            "inactivity_timeout_s": {"type": "number"},
+                            "include_history": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "comfy_download_image",
+                    "description": "Download Comfy output",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "subfolder": {"type": "string"},
+                            "image_type": {"type": "string"},
+                            "save_path": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "parentId": {"type": "string"},
+                            "name": {"type": "string"},
+                            "tags": {"type": "array"},
+                            "namespace": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process(
+        "TANK TRACKS FLOW REQUEST\n"
+        "Run this as a deterministic, minimal-branch flow inside the TUI.\n\n"
+        "Source catalog image ID: 44a4417e-662f-4275-413a-9dba9a6de200\n"
+        "Requested upload target image ID: 44a4417e-662f-4275-413a-9dba9a6de200\n"
+        "Workflow preference: add_tank_tracks\n"
+        "Seed override: use workflow default seed\n"
+        "Denoise override: use workflow default denoise\n"
+        "Post aspect ratio adjustment: none\n"
+    )
+
+    assert llm.calls == 0
+    assert "uploaded-watch" in answer
+    assert [event.name for event in events] == [
+        "photarium_get",
+        "photarium_download_image",
+        "workflows_run",
+        "workflows_watch",
+        "photarium_upload_from_path",
+    ]
+    assert router.calls[3][0] == "workflows_watch"
+    assert router.calls[4][0] == "comfy_download_image"
+    assert router.calls[5][0] == "photarium_upload_from_path"
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_repairs_variation_workflows_run_with_downloaded_source_image():
     llm = MissingOverridesVariationWorkflowRunLLM()
 
