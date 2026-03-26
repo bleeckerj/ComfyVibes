@@ -9,7 +9,7 @@ TARGET = (
 
 
 async def main() -> None:
-    async with ComfyClient("http://192.168.15.54:8188") as client:
+    async with ComfyClient("http://192.168.15.56:8188") as client:
         history = await client.get_history()
 
     matches = []

@@ -1072,15 +1072,15 @@ def test_startup_renders_comfy_server_info_diagnostics(monkeypatch):
         async def call_tool(self, name, arguments):
             assert name == "comfy_server_info"
             return {
-                "configured_base_url": "http://192.168.15.54:8188",
+                "configured_base_url": "http://192.168.15.56:8188",
                 "target": {
-                    "host": "192.168.15.54",
+                    "host": "192.168.15.56",
                     "port": 8188,
-                    "resolved_ips": ["192.168.15.54"],
+                    "resolved_ips": ["192.168.15.56"],
                 },
                 "probe": {
                     "ok": False,
-                    "endpoint": "http://192.168.15.54:8188/queue",
+                    "endpoint": "http://192.168.15.56:8188/queue",
                     "error": "All connection attempts failed",
                     "latency_ms": 12.5,
                 },
@@ -1092,8 +1092,8 @@ def test_startup_renders_comfy_server_info_diagnostics(monkeypatch):
     asyncio.run(app._startup())
 
     assert any("Comfy server-info:" in line for line in chat_lines)
-    assert any("configured_base_url=http://192.168.15.54:8188" in line for line in chat_lines)
-    assert any("resolved_ips=192.168.15.54" in line for line in chat_lines)
+    assert any("configured_base_url=http://192.168.15.56:8188" in line for line in chat_lines)
+    assert any("resolved_ips=192.168.15.56" in line for line in chat_lines)
     assert any("probe_ok=false" in line and "All connection attempts failed" in line for line in chat_lines)
     assert any("Tools ready:" in line for line in tool_lines)
 

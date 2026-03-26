@@ -4,7 +4,7 @@ from typing import Iterable
 
 import aiohttp
 
-WS_URL = "ws://192.168.15.54:8188/ws"
+WS_URL = "ws://192.168.15.56:8188/ws"
 PROMPT_IDS = {
     "77805276-e7d7-4d05-88bf-530912e2d9cf",
     "b820ff72-09c7-44bf-b432-a7e49a943336",

@@ -17,8 +17,8 @@ PROMPT = (
 
 API_PATH = Path("/Volumes/home/ComfyUI_00356__api.json")
 PARAMS_PATH = Path("/Users/julian/Code/nfl-comfymcp/ComfyUI_00356__params.json")
-COMFY_URL = "http://192.168.15.54:8188"
-WS_URL = "ws://192.168.15.54:8188/ws"
+COMFY_URL = "http://192.168.15.56:8188"
+WS_URL = "ws://192.168.15.56:8188/ws"
 
 
 async def main() -> None:
