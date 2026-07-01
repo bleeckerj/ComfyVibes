@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Dict
 
 from comfy_mcp.comfy_client.client import ComfyClient
 from comfy_mcp.config.models import AppConfig
+from comfy_mcp.mcp_server.comfy_org_auth import build_comfy_org_extra_data
 from comfy_mcp.mcp_server.policy import Policy
 from comfy_mcp.mcp_server.tool_registry import build_handler_registry
 from comfy_mcp.mcp_server.tool_specs import build_tool_specs
@@ -42,12 +43,19 @@ def build_tools(config: AppConfig) -> tuple[ComfyTools, WorkflowTools]:
         readonly_mode=config.readonly_mode,
         max_workflow_bytes=config.max_workflow_bytes,
     )
+    comfy_org_extra_data = build_comfy_org_extra_data(
+        auth_token=config.comfy_org_auth_token,
+        auth_token_file=config.comfy_org_auth_token_file,
+        api_key=config.comfy_org_api_key,
+        api_key_file=config.comfy_org_api_key_file,
+    )
     return ComfyTools(client), WorkflowTools(
         store,
         client,
         policy,
         comfy_output_dir=config.comfy_output_dir,
         run_store=WorkflowStore(run_root),
+        comfy_org_extra_data=comfy_org_extra_data,
     )
 
 def _tool_to_payload(tool: Any) -> Dict[str, Any]:

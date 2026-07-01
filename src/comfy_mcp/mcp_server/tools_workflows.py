@@ -31,6 +31,7 @@ class WorkflowTools:
         reasoning: WorkflowReasoningService | None = None,
         comfy_output_dir: Path | None = None,
         run_store: WorkflowStore | None = None,
+        comfy_org_extra_data: dict[str, str] | None = None,
     ) -> None:
         remote_client = RemoteToolClient()
         self._default_remote_call = remote_client.call
@@ -46,6 +47,7 @@ class WorkflowTools:
             comfy_output_dir=comfy_output_dir,
             remote_client=remote_client,
             image_service=image_service,
+            comfy_org_extra_data=comfy_org_extra_data,
         )
         lineage_store = run_store or WorkflowStore(Path.cwd() / "run_workflows")
         self._lineage_execution = WorkflowExecutionService(
@@ -55,6 +57,7 @@ class WorkflowTools:
             comfy_output_dir=comfy_output_dir,
             remote_client=remote_client,
             image_service=image_service,
+            comfy_org_extra_data=comfy_org_extra_data,
         )
         self._lineage = WorkflowLineageService(
             lineage_store,

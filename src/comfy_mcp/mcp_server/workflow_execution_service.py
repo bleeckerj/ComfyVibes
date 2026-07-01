@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from comfy_mcp.comfy_client.client import ComfyClient
+from comfy_mcp.mcp_server.comfy_org_auth import merge_comfy_org_extra_data
 from comfy_mcp.mcp_server.policy import Policy
 from comfy_mcp.mcp_server.remote_tool_client import RemoteToolClient
 from comfy_mcp.mcp_server.workflow_image_service import WorkflowImageService
@@ -32,13 +33,14 @@ class WorkflowExecutionService:
     }
     _SEMANTIC_HINT_KEYWORDS = ("prompt", "caption", "description", "subject", "title", "concept", "theme", "style", "scene")
 
-    def __init__(self, store: WorkflowStore, client: ComfyClient, policy: Policy, comfy_output_dir: Path | None = None, remote_client: RemoteToolClient | None = None, image_service: WorkflowImageService | None = None) -> None:
+    def __init__(self, store: WorkflowStore, client: ComfyClient, policy: Policy, comfy_output_dir: Path | None = None, remote_client: RemoteToolClient | None = None, image_service: WorkflowImageService | None = None, comfy_org_extra_data: dict[str, str] | None = None) -> None:
         self._store = store
         self._client = client
         self._policy = policy
         self._comfy_output_dir = comfy_output_dir.expanduser().resolve() if comfy_output_dir else None
         self._remote_client = remote_client or RemoteToolClient()
         self._image_service = image_service or WorkflowImageService()
+        self._comfy_org_extra_data = dict(comfy_org_extra_data or {})
 
     async def run(self, workflow_id: str, overrides: dict[str, Any], client_id: str | None = None, token: str | None = None, force: bool = False, wait_timeout_s: float = 300.0, wait_poll_ms: int = 1000) -> dict[str, Any]:
         self._policy.enforce_mutation(token)
@@ -73,7 +75,7 @@ class WorkflowExecutionService:
         payload_bytes = len(json.dumps(patched).encode("utf-8"))
         self._policy.enforce_payload_size(payload_bytes)
         queued_at = time.time()
-        queue_result = await self._client.queue_prompt(patched, client_id=client_id)
+        queue_result = await self._client.queue_prompt(patched, client_id=client_id, extra_data=self._prompt_extra_data())
         prompt_id = queue_result.get("prompt_id")
         if not prompt_id:
             if hash_mismatch_auto_forced:
@@ -697,7 +699,7 @@ class WorkflowExecutionService:
         if seed is not None and "3" in patched:
             patched["3"].setdefault("inputs", {})["seed"] = int(seed)
         queued_at = time.time()
-        queue_result = await self._client.queue_prompt(patched, client_id=client_id)
+        queue_result = await self._client.queue_prompt(patched, client_id=client_id, extra_data=self._prompt_extra_data())
         prompt_id = queue_result.get("prompt_id")
         if not prompt_id:
             return {"workflow_id": workflow_id, "error": "Failed to queue prompt", "queue_result": queue_result}
@@ -712,3 +714,6 @@ class WorkflowExecutionService:
             if isinstance(save_inputs, dict):
                 completion["filename_prefix_used"] = str(save_inputs.get("filename_prefix") or "")
         return completion
+
+    def _prompt_extra_data(self) -> dict[str, object] | None:
+        return merge_comfy_org_extra_data(None, self._comfy_org_extra_data)

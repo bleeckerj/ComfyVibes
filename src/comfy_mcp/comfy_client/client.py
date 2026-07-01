@@ -65,9 +65,12 @@ class ComfyClient:
         self,
         prompt: dict,
         client_id: Optional[str] = None,
+        extra_data: Optional[dict[str, Any]] = None,
     ) -> ComfyPromptResult:
         """Submit a prompt graph to `/prompt`."""
         payload = {"prompt": prompt}
+        if extra_data:
+            payload["extra_data"] = dict(extra_data)
         if client_id:
             payload["client_id"] = client_id
         return await self._post_json("/prompt", payload)

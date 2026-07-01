@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from pydantic import AnyUrl, Field
+from pydantic import AnyUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +30,10 @@ class AppConfig(BaseSettings):
     bind_port: int = Field(default=7337)
     http_bind_host: str = Field(default="127.0.0.1")
     http_bind_port: int = Field(default=8181)
+    comfy_org_auth_token: Optional[SecretStr] = Field(default=None)
+    comfy_org_auth_token_file: Optional[Path] = Field(default=None)
+    comfy_org_api_key: Optional[SecretStr] = Field(default=None)
+    comfy_org_api_key_file: Optional[Path] = Field(default=None)
 
     def resolved_workflow_root(self) -> Path:
         """Return expanded path for workflow library root."""

@@ -1,6 +1,8 @@
 """Tests for ComfyClient HTTP behavior."""
 
 import asyncio
+import json
+
 import httpx
 import pytest
 
@@ -105,6 +107,31 @@ def test_prompt_in_queue_handles_list_payload_shape() -> None:
     assert ComfyClient._prompt_in_queue("abc123", queue) is True
     assert ComfyClient._prompt_in_queue("def456", queue) is True
     assert ComfyClient._prompt_in_queue("zzz999", queue) is False
+
+
+@pytest.mark.asyncio
+async def test_queue_prompt_sends_extra_data() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(200, json={"prompt_id": "abc123"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(base_url="http://example.com", transport=transport) as client:
+        comfy = ComfyClient(base_url="http://example.com", http_client=client)
+        result = await comfy.queue_prompt(
+            {"1": {"class_type": "TestNode", "inputs": {}}},
+            client_id="client-1",
+            extra_data={"auth_token_comfy_org": "token-value"},
+        )
+
+    assert result == {"prompt_id": "abc123"}
+    assert captured["payload"] == {
+        "prompt": {"1": {"class_type": "TestNode", "inputs": {}}},
+        "extra_data": {"auth_token_comfy_org": "token-value"},
+        "client_id": "client-1",
+    }
 
 
 @pytest.mark.asyncio

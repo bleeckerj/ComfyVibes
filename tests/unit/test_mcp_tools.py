@@ -21,6 +21,7 @@ class FakeComfyClient:
 
     def __init__(self) -> None:
         self.last_prompt = None
+        self.last_extra_data = None
         self.uploaded_files: list[dict] = []
         self._base_url = "http://127.0.0.1:8188"
 
@@ -44,8 +45,9 @@ class FakeComfyClient:
     async def get_embeddings(self):
         return ["embeddingA"]
 
-    async def queue_prompt(self, prompt, client_id=None):
+    async def queue_prompt(self, prompt, client_id=None, extra_data=None):
         self.last_prompt = prompt
+        self.last_extra_data = extra_data
         return {"prompt_id": "abc123"}
 
     async def upload_image(self, file_path: str, image_type: str = "input", subfolder: str | None = None, overwrite: bool = False):
@@ -210,10 +212,19 @@ async def test_workflow_tools_run_and_wait(tmp_path: Path) -> None:
     }
     store.save_workflow("demo", workflow, params=params)
     policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10_000)
-    tools = WorkflowTools(store, FakeComfyClient(), policy, extractor=FakeExtractor())
+    client = FakeComfyClient()
+    tools = WorkflowTools(
+        store,
+        client,
+        policy,
+        extractor=FakeExtractor(),
+        comfy_org_extra_data={"auth_token_comfy_org": "token-value"},
+    )
 
     result = await tools.run("demo", {"seed": 7})
     assert result["prompt_id"] == "abc123"
+    assert client.last_extra_data == {"auth_token_comfy_org": "token-value"}
+    assert "token-value" not in json.dumps(result)
 
     wait = await tools.wait("abc123", timeout_s=0.1, poll_ms=10)
     assert wait["status"] in {"complete", "timeout"}
