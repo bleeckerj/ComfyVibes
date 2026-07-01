@@ -1,0 +1,45 @@
+{
+  "id": "juggernaut-xl",
+  "name": "of",
+  "description": "Imported from artifact",
+  "tags": [
+    "text-to-image",
+    "sampler"
+  ],
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "width",
+      "batch_size",
+      "prompt",
+      "prompt_2",
+      "sampler_name",
+      "scheduler",
+      "ckpt_name",
+      "filename_prefix"
+    ]
+  }
+}

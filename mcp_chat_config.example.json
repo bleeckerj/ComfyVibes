@@ -68,6 +68,11 @@
       ],
       "cwd": "/ABSOLUTE/PATH/TO/nfl-backoffice",
       "tool_prefixes": [
+        "newsletter_",
+        "suggest_newsletter_",
+        "format_",
+        "get_section_types",
+        "create_newsletter_",
         "backoffice_"
       ]
     },

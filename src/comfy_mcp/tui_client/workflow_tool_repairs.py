@@ -265,9 +265,9 @@ class WorkflowToolRepairService:
             if canonical in {"image", "image_2"}:
                 repaired.pop(canonical, None)
         repaired["overrides"] = repaired_overrides
-        if "wait_timeout_s" not in repaired:
+        if "wait_timeout_s" not in repaired and self.workflow_run_schema_has_property(orchestrator, "wait_timeout_s"):
             repaired["wait_timeout_s"] = 300
-        if "wait_poll_ms" not in repaired:
+        if "wait_poll_ms" not in repaired and self.workflow_run_schema_has_property(orchestrator, "wait_poll_ms"):
             repaired["wait_poll_ms"] = 1000
         return repaired
 
@@ -290,9 +290,11 @@ class WorkflowToolRepairService:
             if isinstance(image_value, str) and image_value.strip():
                 return arguments
         source_image_id = self.extract_variation_source_image_id(user_text)
-        if not source_image_id:
-            return arguments
-        local_source_path = await self.download_variation_source_image(orchestrator, source_image_id)
+        local_source_path = self.find_recorded_source_image_local_path(orchestrator, source_image_id)
+        if not local_source_path and source_image_id:
+            local_source_path = await self.download_variation_source_image(orchestrator, source_image_id)
+        if not local_source_path:
+            local_source_path = self.find_recorded_source_image_local_path(orchestrator, None)
         if not local_source_path:
             return arguments
         repaired = dict(arguments)
@@ -300,6 +302,34 @@ class WorkflowToolRepairService:
         repaired_overrides["image"] = local_source_path
         repaired["overrides"] = repaired_overrides
         return repaired
+
+    def maybe_record_downloaded_source_image(
+        self,
+        orchestrator: Any,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        result: Any,
+    ) -> None:
+        if tool_name not in {"photarium_download_image", "catalog_download_image", "photarium_download_original"}:
+            return
+        if not isinstance(arguments, dict):
+            return
+        schema = orchestrator._tool_input_schema_by_name.get(tool_name)
+        image_id_key = self.select_download_image_id_key(schema)
+        if not image_id_key:
+            return
+        source_image_id = str(arguments.get(image_id_key) or "").strip()
+        if not source_image_id:
+            return
+        save_path_key = self.select_download_save_path_key(schema)
+        requested_path: Path | None = None
+        if save_path_key:
+            raw_requested = arguments.get(save_path_key)
+            if isinstance(raw_requested, str) and raw_requested.strip():
+                requested_path = Path(raw_requested.strip())
+        resolved = self.resolve_downloaded_file_path(result, requested_path=requested_path)
+        if resolved:
+            orchestrator._record_source_image_local_path(resolved, source_image_id)
 
     async def repair_tanktracks_workflows_run_arguments(
         self,
@@ -330,6 +360,8 @@ class WorkflowToolRepairService:
         if workflow_id != "add_tank_tracks":
             return repaired
         existing_overrides = repaired.get("overrides")
+        if "overrides" in repaired and not isinstance(existing_overrides, dict):
+            return repaired
         repaired_overrides = dict(existing_overrides) if isinstance(existing_overrides, dict) else {}
         image_value = repaired_overrides.get("image")
         if not (isinstance(image_value, str) and image_value.strip()):
@@ -342,9 +374,9 @@ class WorkflowToolRepairService:
         if not (isinstance(prefix_value, str) and prefix_value.strip()):
             repaired_overrides["filename_prefix"] = f"AddTankTracks_{uuid.uuid4().hex[:8]}"
         repaired["overrides"] = repaired_overrides
-        if "wait_timeout_s" not in repaired:
+        if "wait_timeout_s" not in repaired and self.workflow_run_schema_has_property(orchestrator, "wait_timeout_s"):
             repaired["wait_timeout_s"] = 300
-        if "wait_poll_ms" not in repaired:
+        if "wait_poll_ms" not in repaired and self.workflow_run_schema_has_property(orchestrator, "wait_poll_ms"):
             repaired["wait_poll_ms"] = 1000
         return repaired
 
@@ -414,6 +446,14 @@ class WorkflowToolRepairService:
             if key in props:
                 return key
         return "workflow_id"
+
+    @staticmethod
+    def workflow_run_schema_has_property(orchestrator: Any, property_name: str) -> bool:
+        schema = getattr(orchestrator, "_tool_input_schema_by_name", {}).get("workflows_run")
+        if not isinstance(schema, dict):
+            return False
+        props = schema.get("properties")
+        return isinstance(props, dict) and property_name in props
 
     @staticmethod
     def extract_param_names(payload: Any) -> list[str]:
@@ -573,6 +613,23 @@ class WorkflowToolRepairService:
         for candidate in ("photarium_download_image", "catalog_download_image", "photarium_download_original"):
             if candidate in orchestrator._tool_input_schema_by_name:
                 return candidate
+        return None
+
+    @staticmethod
+    def find_recorded_source_image_local_path(orchestrator: Any, source_image_id: str | None) -> str | None:
+        mapping = getattr(orchestrator, "_source_image_id_by_local_path", None)
+        if not isinstance(mapping, dict) or not mapping:
+            return None
+        target = str(source_image_id or "").strip()
+        for raw_path, raw_source_image_id in reversed(list(mapping.items())):
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            if target and str(raw_source_image_id or "").strip() != target:
+                continue
+            try:
+                return str(Path(raw_path).expanduser().resolve())
+            except Exception:
+                return raw_path.strip()
         return None
 
     @staticmethod

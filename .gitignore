@@ -26,6 +26,7 @@ comfy-metadata-check
 .env.*
 !.env.example
 mcp_chat_config.json
+.codex/
 
 # Test, coverage, and tooling caches
 .pytest_cache/

@@ -93,7 +93,7 @@ class ChatOrchestrator:
             self._workflow_tool_repairs,
             self._binary_transfer_adapter,
         )
-        self._last_tool_selection_debug: Dict[str, int] = {}
+        self._last_tool_selection_debug: Dict[str, Any] = {}
 
     @staticmethod
     def _compact_tool_result_for_llm(tool_name: str, result: Any) -> Any:
@@ -189,6 +189,10 @@ class ChatOrchestrator:
             "total_content_chars": self._total_content_chars(),
         }
 
+    def last_tool_selection_debug(self) -> Dict[str, Any]:
+        """Return the most recent selector diagnostics for UI/status commands."""
+        return dict(self._last_tool_selection_debug)
+
     def set_tools(self, tools: List[Dict[str, Any]]) -> None:
         self._tools = list(tools)
         self._tool_input_schema_by_name = {}
@@ -254,6 +258,7 @@ class ChatOrchestrator:
         repeated_signal_lookup_key: str | None = None
         repeated_signal_lookup_rounds = 0
         expanded_tool_retry_used = False
+        domain_guardrail_retry_used = False
         force_full_tool_window_next_round = False
         expanded_retry_reason: str | None = None
 
@@ -374,6 +379,23 @@ class ChatOrchestrator:
                     )
                     return message, tool_events
 
+                guardrail_payload = self._domain_guardrail_retry_payload(
+                    prepared_calls=prepared_calls,
+                    user_text=user_text,
+                )
+                if guardrail_payload and not domain_guardrail_retry_used:
+                    domain_guardrail_retry_used = True
+                    repeated_tool_rounds = 0
+                    previous_tool_signature = None
+                    self._append_message(
+                        {
+                            "role": "system",
+                            "content": self._domain_guardrail_corrective_note(guardrail_payload),
+                        }
+                    )
+                    _emit_progress("llm_tools_retry_domain_guardrail", guardrail_payload)
+                    continue
+
                 self._append_message(
                     {
                         "role": "assistant",
@@ -411,6 +433,12 @@ class ChatOrchestrator:
                         async with self._tool_execution_lock:
                             raw_result = await self._router.call_tool(execute_name, execute_arguments)
                         result = normalize_search_tool_result(call.name, raw_result)
+                        self._workflow_tool_repairs.maybe_record_downloaded_source_image(
+                            self,
+                            execute_name,
+                            execute_arguments,
+                            result,
+                        )
                         self._record_image_namespaces_from_result(result)
                         auto_upload = await self._maybe_auto_upload_workflow_outputs(
                             execute_name,
@@ -506,6 +534,8 @@ class ChatOrchestrator:
     @classmethod
     def _match_strict_command(cls, user_text: str) -> StrictCommand | None:
         normalized_text = str(user_text or "")
+        if cls._should_use_strict_variation_flow(normalized_text):
+            return StrictCommand(kind="variation_flow", target=user_text)
         if (
             "TANK TRACKS FLOW REQUEST" in normalized_text.upper()
             and "Run this as a deterministic, minimal-branch flow inside the TUI." in normalized_text
@@ -533,6 +563,14 @@ class ChatOrchestrator:
         on_progress: Callable[[str, Dict[str, Any]], None] | None,
         stop_after_tool_calls: bool,
     ) -> tuple[str | None, List[ToolEvent]]:
+        if command.kind == "variation_flow":
+            return await self._execute_strict_variation_flow(
+                command,
+                user_text=user_text,
+                tool_events=tool_events,
+                on_progress=on_progress,
+                stop_after_tool_calls=stop_after_tool_calls,
+            )
         if command.kind == "tanktracks_flow":
             return await self._execute_strict_tanktracks_flow(
                 command,
@@ -554,6 +592,275 @@ class ChatOrchestrator:
         if on_progress:
             on_progress("complete", {"assistant_text": message, "strict_command": command.kind})
         return message, tool_events
+
+    async def _execute_strict_variation_flow(
+        self,
+        command: StrictCommand,
+        *,
+        user_text: str,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+        stop_after_tool_calls: bool,
+    ) -> tuple[str | None, List[ToolEvent]]:
+        del user_text
+        request_text = command.target or ""
+        source_image_id = self._extract_variation_source_image_id(request_text)
+        if not source_image_id:
+            message = "Variation flow failed: missing source image ID."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "variation_flow"})
+            return message, tool_events
+
+        workflow_id = self._extract_variation_workflow_id(request_text) or "image_variation_maker"
+        run_count = self._extract_variation_run_count(request_text) or 1
+        sweep_target = self._extract_variation_sweep_target(request_text)
+        if sweep_target is None and run_count > 1:
+            sweep_target = "seed"
+        if sweep_target == "prompt":
+            message = "Variation flow failed: strict prompt sweeps are not supported."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "variation_flow"})
+            return message, tool_events
+
+        source_metadata = await self._fetch_source_image_metadata_strict(
+            source_image_id,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        effective_parent_id = source_image_id
+        source_namespace = ""
+        if isinstance(source_metadata, dict):
+            self._record_image_namespaces_from_result(source_metadata)
+            effective_parent_id = self._binary_transfer_adapter.resolve_effective_parent_id(
+                source_metadata,
+                fallback_source_image_id=source_image_id,
+            )
+            source_namespace = (
+                self._binary_transfer_adapter._first_non_empty_string(source_metadata, "namespace") or ""
+            )
+
+        local_source_path = await self._download_source_image_strict(
+            source_image_id,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        if not local_source_path:
+            message = f"Variation flow failed: could not download source image {source_image_id}."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "variation_flow"})
+            return message, tool_events
+        self._record_source_image_local_path(local_source_path, source_image_id)
+
+        param_names = await self._fetch_workflow_param_names_strict(
+            workflow_id,
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        if not param_names and self._is_image_variation_workflow(workflow_id):
+            param_names = ["seed", "filename_prefix", "image", "string"]
+
+        image_key = self._select_variation_image_key(param_names) or "image"
+        prompt_key = self._select_variation_prompt_key(param_names)
+        seed_key = self._workflow_tool_repairs.select_seed_override_key(param_names)
+        filename_prefix_key = self._workflow_tool_repairs.select_filename_prefix_override_key(param_names) or "filename_prefix"
+        sweep_key = self._select_variation_sweep_key(sweep_target, param_names) if sweep_target else None
+
+        analysis_prompt = self._extract_variation_analysis_prompt(request_text)
+        extra_instructions = self._extract_variation_extra_instructions(request_text)
+        base_prompt = self._build_variation_base_prompt(
+            analysis_prompt=analysis_prompt,
+            extra_instructions=extra_instructions,
+        )
+
+        numeric_sweep_values = self._extract_variation_sweep_values(request_text)
+        seed_values = self._extract_variation_seed_values(request_text)
+        if sweep_target == "seed":
+            desired_runs = min(max(1, run_count), 24)
+            actual_seed_values = self._normalize_variation_seed_values(seed_values, desired_runs)
+            run_count = len(actual_seed_values)
+        else:
+            actual_seed_values = []
+            if sweep_target and numeric_sweep_values:
+                if run_count > 0:
+                    numeric_sweep_values = numeric_sweep_values[:run_count]
+                run_count = len(numeric_sweep_values)
+            else:
+                run_count = max(1, min(24, run_count))
+
+        fixed_seed: int | None = None
+        if seed_key and sweep_target != "seed":
+            fixed_seed = self._workflow_tool_repairs.generate_random_seed()
+
+        upload_tool = self._select_auto_upload_tool_name()
+        upload_schema = self._tool_input_schema_by_name.get(upload_tool) if upload_tool else None
+        upload_path_key = self._select_upload_local_path_key(upload_schema) if upload_tool else None
+        parent_key = self._binary_transfer_adapter.select_parent_id_key(upload_schema)
+
+        run_records: list[Dict[str, Any]] = []
+        successful_runs = 0
+
+        for run_index in range(run_count):
+            overrides: Dict[str, Any] = {
+                image_key: local_source_path,
+                filename_prefix_key: f"{self._workflow_tool_repairs.default_filename_prefix(workflow_id)}_{run_index + 1:02d}",
+            }
+            if prompt_key and base_prompt:
+                overrides[prompt_key] = base_prompt
+            if seed_key and fixed_seed is not None:
+                overrides[seed_key] = fixed_seed
+
+            sweep_value: Any = None
+            if sweep_target == "seed" and seed_key:
+                sweep_value = actual_seed_values[run_index]
+                overrides[seed_key] = sweep_value
+            elif sweep_target and sweep_key and numeric_sweep_values:
+                raw_value = numeric_sweep_values[run_index]
+                sweep_value = self._coerce_variation_sweep_value(sweep_target, raw_value)
+                overrides[sweep_key] = sweep_value
+
+            workflow_arguments: Dict[str, Any] = {
+                "workflow_id": workflow_id,
+                "overrides": overrides,
+                "wait_timeout_s": 300,
+                "wait_poll_ms": 1000,
+            }
+            workflow_result = await self._run_prepared_strict_tool_call(
+                "workflows_run",
+                workflow_arguments,
+                user_text=request_text,
+                tool_events=tool_events,
+                on_progress=on_progress,
+            )
+
+            output_images = workflow_result.get("output_images") if isinstance(workflow_result, dict) else None
+            if (not isinstance(output_images, list) or not output_images) and isinstance(workflow_result, dict):
+                watched = await self._watch_workflow_outputs_if_needed(
+                    workflow_result,
+                    tool_events=tool_events,
+                    on_progress=on_progress,
+                )
+                if isinstance(watched, dict):
+                    workflow_result = watched
+                    output_images = workflow_result.get("output_images")
+            if (
+                isinstance(workflow_result, dict)
+                and (not isinstance(output_images, list) or not output_images)
+                and self._should_retry_workflow_without_outputs(workflow_result)
+            ):
+                retry_arguments = dict(workflow_arguments)
+                retry_arguments["force"] = True
+                retry_result = await self._run_prepared_strict_tool_call(
+                    "workflows_run",
+                    retry_arguments,
+                    user_text=request_text,
+                    tool_events=tool_events,
+                    on_progress=on_progress,
+                )
+                retry_output_images = retry_result.get("output_images") if isinstance(retry_result, dict) else None
+                if (not isinstance(retry_output_images, list) or not retry_output_images) and isinstance(retry_result, dict):
+                    watched_retry = await self._watch_workflow_outputs_if_needed(
+                        retry_result,
+                        tool_events=tool_events,
+                        on_progress=on_progress,
+                    )
+                    if isinstance(watched_retry, dict):
+                        retry_result = watched_retry
+                        retry_output_images = retry_result.get("output_images")
+                workflow_result = retry_result
+                output_images = retry_output_images
+
+            record: Dict[str, Any] = {
+                "run_index": run_index + 1,
+                "sweep_target": sweep_target or "seed",
+                "sweep_value": sweep_value,
+                "uploaded_image_ids": [],
+            }
+            if not isinstance(output_images, list) or not output_images:
+                record["status"] = "failed"
+                run_records.append(record)
+                continue
+
+            successful_runs += 1
+            record["status"] = "generated"
+
+            if upload_tool and upload_schema and upload_path_key:
+                for image_payload in output_images:
+                    if not isinstance(image_payload, dict):
+                        continue
+                    local_output_path, _path_source = await self._resolve_output_image_local_path(image_payload)
+                    if not local_output_path:
+                        continue
+                    upload_arguments: Dict[str, Any] = {upload_path_key: local_output_path}
+                    filename = str(image_payload.get("filename") or "").strip()
+                    stem = self._safe_filename_stem(Path(filename).stem if filename else Path(local_output_path).stem)
+                    if self._schema_has_property(upload_schema, "name"):
+                        upload_arguments["name"] = stem
+                    if self._schema_has_property(upload_schema, "title"):
+                        upload_arguments["title"] = stem
+                    if self._schema_has_property(upload_schema, "namespace"):
+                        upload_arguments["namespace"] = source_namespace or "cf-default"
+                    if parent_key and effective_parent_id:
+                        upload_arguments[parent_key] = effective_parent_id
+                    prompt_value = None
+                    if prompt_key:
+                        prompt_value = overrides.get(prompt_key)
+                    if not isinstance(prompt_value, str) or not prompt_value.strip():
+                        prompt_value = base_prompt
+                    if isinstance(prompt_value, str) and prompt_value.strip():
+                        if self._schema_has_property(upload_schema, "prompt"):
+                            upload_arguments["prompt"] = prompt_value.strip()
+                        if self._schema_has_property(upload_schema, "positive_prompt"):
+                            upload_arguments["positive_prompt"] = prompt_value.strip()
+                    upload_arguments = normalize_photarium_upload_arguments(
+                        upload_tool,
+                        upload_arguments,
+                        upload_schema,
+                        fallback_text=request_text,
+                    )
+                    upload_result = await self._run_strict_tool_call(
+                        upload_tool,
+                        upload_arguments,
+                        tool_events=tool_events,
+                        on_progress=on_progress,
+                    )
+                    uploaded_image_id = self._extract_image_id(upload_result) if isinstance(upload_result, dict) else None
+                    if uploaded_image_id:
+                        record["uploaded_image_ids"].append(uploaded_image_id)
+                if record["uploaded_image_ids"]:
+                    record["status"] = "uploaded"
+            run_records.append(record)
+
+        if successful_runs == 0:
+            message = "Variation flow failed: no runs produced output_images."
+            self._append_message({"role": "assistant", "content": message})
+            if on_progress:
+                on_progress("complete", {"assistant_text": message, "strict_command": "variation_flow"})
+            return message, tool_events
+
+        mapping_parts: list[str] = []
+        for record in run_records:
+            if record.get("status") == "failed":
+                mapping_parts.append(f"run {record['run_index']}: failed")
+                continue
+            value = record.get("sweep_value")
+            value_text = str(value) if value is not None else "default"
+            uploaded_ids = record.get("uploaded_image_ids") or []
+            if uploaded_ids:
+                mapping_parts.append(f"run {record['run_index']} ({value_text}) -> {', '.join(uploaded_ids)}")
+            else:
+                mapping_parts.append(f"run {record['run_index']} ({value_text}) -> generated")
+        message = (
+            f"Variation flow completed: {successful_runs}/{len(run_records)} runs produced outputs. "
+            f"Effective parent ID: {effective_parent_id}. "
+            + " | ".join(mapping_parts)
+        )
+        self._append_message({"role": "assistant", "content": message})
+        if on_progress:
+            on_progress("complete", {"assistant_text": None if stop_after_tool_calls else message, "strict_command": "variation_flow"})
+        return (None if stop_after_tool_calls else message), tool_events
 
     async def _execute_strict_tanktracks_flow(
         self,
@@ -1129,6 +1436,193 @@ class ChatOrchestrator:
             return None
         return match.group(1).strip()
 
+    @classmethod
+    def _should_use_strict_variation_flow(cls, request_text: str) -> bool:
+        if "IMAGE VARIATION FLOW REQUEST" not in str(request_text or "").upper():
+            return False
+        sweep_target = cls._extract_variation_sweep_target(request_text)
+        run_count = cls._extract_variation_run_count(request_text) or 1
+        if sweep_target == "prompt":
+            return False
+        if sweep_target in {"seed", "denoise", "cfg", "guidance", "strength", "steps"}:
+            if sweep_target == "seed":
+                return run_count > 1 or bool(cls._extract_variation_seed_values(request_text))
+            return bool(cls._extract_variation_sweep_values(request_text))
+        return run_count > 1
+
+    @staticmethod
+    def _extract_variation_workflow_id(request_text: str) -> str | None:
+        match = re.search(r"Workflow preference:\s*([A-Za-z0-9_.:-]+)", request_text, re.I)
+        if not match:
+            return None
+        value = match.group(1).strip()
+        return value or None
+
+    @staticmethod
+    def _extract_variation_analysis_prompt(request_text: str) -> str | None:
+        match = re.search(r"Image analysis prompt:\s*(.+)", request_text, re.I)
+        if not match:
+            return None
+        value = match.group(1).strip()
+        if not value or value.lower().startswith("use workflow default"):
+            return None
+        return value
+
+    @staticmethod
+    def _extract_variation_extra_instructions(request_text: str) -> str | None:
+        match = re.search(r"Additional variation instructions:\s*(.+)", request_text, re.I)
+        if not match:
+            return None
+        value = match.group(1).strip()
+        if not value or value.lower() == "none":
+            return None
+        return value
+
+    @staticmethod
+    def _build_variation_base_prompt(*, analysis_prompt: str | None, extra_instructions: str | None) -> str | None:
+        if analysis_prompt and extra_instructions:
+            return f"{analysis_prompt}\n\nAdditional variation instructions: {extra_instructions}"
+        if analysis_prompt:
+            return analysis_prompt
+        if extra_instructions:
+            return extra_instructions
+        return None
+
+    @staticmethod
+    def _extract_variation_run_count(request_text: str) -> int | None:
+        match = re.search(r"Requested run count:\s*(\d{1,2})", request_text, re.I)
+        if not match:
+            return None
+        try:
+            return max(1, min(24, int(match.group(1))))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_variation_sweep_target(request_text: str) -> str | None:
+        match = re.search(r"Sweep target:\s*([A-Za-z0-9_ ()-]+)", request_text, re.I)
+        if not match:
+            return None
+        raw = match.group(1).strip().lower()
+        aliases = {
+            "seed": "seed",
+            "seed (default)": "seed",
+            "denoise": "denoise",
+            "cfg": "cfg",
+            "guidance": "guidance",
+            "strength": "strength",
+            "steps": "steps",
+            "prompt": "prompt",
+        }
+        return aliases.get(raw)
+
+    @staticmethod
+    def _extract_variation_sweep_values(request_text: str) -> list[float]:
+        match = re.search(r"Sweep values:\s*(.+)", request_text, re.I)
+        if not match:
+            return []
+        raw = match.group(1).strip()
+        if not raw or raw.lower() == "none provided":
+            return []
+        values: list[float] = []
+        for token in re.findall(r"-?\d*\.?\d+", raw):
+            try:
+                values.append(float(token))
+            except ValueError:
+                continue
+        return values[:24]
+
+    @staticmethod
+    def _extract_variation_seed_values(request_text: str) -> list[int]:
+        match = re.search(r"Seed sweep values \(randomized\):\s*(.+)", request_text, re.I)
+        if not match:
+            return []
+        raw = match.group(1).strip()
+        if not raw or raw.lower() == "none provided":
+            return []
+        values: list[int] = []
+        for token in re.findall(r"\d+", raw):
+            try:
+                values.append(int(token))
+            except ValueError:
+                continue
+        return values[:24]
+
+    async def _fetch_workflow_param_names_strict(
+        self,
+        workflow_id: str,
+        *,
+        tool_events: List[ToolEvent],
+        on_progress: Callable[[str, Dict[str, Any]], None] | None,
+    ) -> list[str]:
+        if "workflows_params_get" not in self._tool_input_schema_by_name:
+            return []
+        schema = self._tool_input_schema_by_name.get("workflows_params_get")
+        workflow_id_key = self._workflow_tool_repairs.select_workflow_id_key(schema)
+        if not workflow_id_key:
+            return []
+        result = await self._run_strict_tool_call(
+            "workflows_params_get",
+            {workflow_id_key: workflow_id},
+            tool_events=tool_events,
+            on_progress=on_progress,
+        )
+        return self._workflow_tool_repairs.extract_param_names(result)
+
+    @staticmethod
+    def _select_variation_image_key(param_names: list[str]) -> str | None:
+        lowered_map = {name.strip().lower(): name for name in param_names if isinstance(name, str) and name.strip()}
+        for preferred in ("image", "input_image", "source_image"):
+            if preferred in lowered_map:
+                return lowered_map[preferred]
+        return None
+
+    @staticmethod
+    def _select_variation_prompt_key(param_names: list[str]) -> str | None:
+        lowered_map = {name.strip().lower(): name for name in param_names if isinstance(name, str) and name.strip()}
+        for preferred in ("image_analysis_instructions", "positive_prompt", "prompt", "text_prompt", "string"):
+            if preferred in lowered_map:
+                return lowered_map[preferred]
+        return None
+
+    @staticmethod
+    def _select_variation_sweep_key(sweep_target: str | None, param_names: list[str]) -> str | None:
+        if not sweep_target:
+            return None
+        lowered_map = {name.strip().lower(): name for name in param_names if isinstance(name, str) and name.strip()}
+        if sweep_target == "denoise":
+            return lowered_map.get("denoise")
+        if sweep_target in {"cfg", "guidance"}:
+            return lowered_map.get("cfg") or lowered_map.get("guidance")
+        if sweep_target == "strength":
+            return lowered_map.get("strength") or lowered_map.get("denoise")
+        if sweep_target == "steps":
+            return lowered_map.get("steps")
+        return None
+
+    def _normalize_variation_seed_values(self, seed_values: list[int], desired_runs: int) -> list[int]:
+        normalized: list[int] = []
+        seen: set[int] = set()
+        for raw in seed_values[:desired_runs]:
+            value = int(raw)
+            if value <= 0 or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        while len(normalized) < desired_runs:
+            candidate = self._workflow_tool_repairs.generate_random_seed()
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        return normalized
+
+    @staticmethod
+    def _coerce_variation_sweep_value(sweep_target: str, raw_value: float) -> Any:
+        if sweep_target in {"seed", "steps", "cfg"}:
+            return max(1, int(round(raw_value)))
+        return float(raw_value)
+
     @staticmethod
     def _extract_tanktracks_seed_override(request_text: str) -> int | None:
         match = re.search(r"Seed override:\s*(.+)", request_text, re.I)
@@ -1188,12 +1682,14 @@ class ChatOrchestrator:
 
     def _select_tools_for_user_text(self, user_text: str, *, force_all: bool = False) -> List[Dict[str, Any]]:
         if force_all:
-            self._last_tool_selection_debug = {
-                "query_token_count": 0,
-                "lexical_match_count": len(self._tools),
-                "index_candidate_count": len(self._tools),
-                "fallback_added_count": 0,
-            }
+            selector = ToolSelector(self._tools)
+            selector.select_tools_for_user_text(
+                user_text=user_text,
+                recent_tool_names=self._recent_tool_names(),
+                max_tools_per_request=max(1, len(self._tools)),
+                context_text=self._recent_context_text(),
+            )
+            self._last_tool_selection_debug = dict(selector.last_selection_debug)
             return list(self._tools)
         selector = ToolSelector(self._tools)
         selected = selector.select_tools_for_user_text(
@@ -1204,6 +1700,85 @@ class ChatOrchestrator:
         )
         self._last_tool_selection_debug = dict(selector.last_selection_debug)
         return selected
+
+    def _domain_guardrail_retry_payload(
+        self,
+        *,
+        prepared_calls: list[tuple[ToolCall, Dict[str, Any]]],
+        user_text: str,
+    ) -> dict[str, Any] | None:
+        if self._allows_generic_mutating_file_tool(user_text):
+            return None
+        generic_calls = [
+            call.name
+            for call, _arguments in prepared_calls
+            if ToolSelector.is_generic_mutating_file_tool(call.name)
+        ]
+        if not generic_calls:
+            return None
+
+        debug = self._last_tool_selection_debug or {}
+        protected_domains = [
+            str(domain)
+            for domain in debug.get("protected_domains", [])
+            if str(domain) in ToolSelector.protected_domain_names()
+        ]
+        if not protected_domains:
+            return None
+
+        pinned_tools = [
+            str(name)
+            for name in debug.get("pinned_tools", [])
+            if str(name) and not ToolSelector.is_generic_mutating_file_tool(str(name))
+        ]
+        omitted_critical_tools = [
+            str(name)
+            for name in debug.get("omitted_critical_tools", [])
+            if str(name) and not ToolSelector.is_generic_mutating_file_tool(str(name))
+        ]
+        domain_tools = pinned_tools or omitted_critical_tools
+        if not domain_tools:
+            return None
+
+        return {
+            "domains": protected_domains,
+            "generic_tool_names": generic_calls,
+            "preferred_tool_names": domain_tools[:12],
+            "omitted_critical_tools": omitted_critical_tools[:12],
+        }
+
+    @staticmethod
+    def _allows_generic_mutating_file_tool(user_text: str) -> bool:
+        lowered = (user_text or "").lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "workspace_file_write",
+                "workspace_file_copy",
+                "workspace_file_move",
+                "workspace_file_delete",
+                "use the workspace file tool",
+                "raw file edit",
+                "manual file edit",
+                "edit the file directly",
+            )
+        )
+
+    @staticmethod
+    def _domain_guardrail_corrective_note(payload: dict[str, Any]) -> str:
+        domains = ", ".join(str(item) for item in payload.get("domains", [])) or "protected domain"
+        generic_tools = ", ".join(str(item) for item in payload.get("generic_tool_names", [])) or "generic file tool"
+        preferred_tools = ", ".join(str(item) for item in payload.get("preferred_tool_names", [])[:8])
+        if preferred_tools:
+            return (
+                f"The prior tool choice used {generic_tools}, but this request matches {domains}. "
+                f"Retry using the domain MCP tools that are available in this tool window first: {preferred_tools}. "
+                "Only use generic mutating workspace file tools if the user explicitly asks for direct file editing."
+            )
+        return (
+            f"The prior tool choice used {generic_tools}, but this request matches {domains}. "
+            "Retry with domain-specific MCP tools first and avoid generic mutating workspace file tools unless explicitly requested."
+        )
 
     def _recent_tool_names(self) -> set[str]:
         names: set[str] = set()

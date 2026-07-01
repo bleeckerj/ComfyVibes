@@ -463,6 +463,7 @@ class ChatApp(App):
         self._is_ready = False
         self._chat_history: List[str] = []
         self._tool_history: List[str] = []
+        self._last_tool_selection_debug: Dict[str, Any] = {}
         self._prompt_history: List[str] = []
         self._prompt_history_cursor: int | None = None
         self._prompt_history_draft: str = ""
@@ -624,6 +625,7 @@ class ChatApp(App):
             if isinstance(tool, dict)
         }
         self._orchestrator.set_tools(self._tools)
+        await self._startup_diagnostics.render_tool_exposure_warnings(self)
         self._write_tools("[bold]Tools ready:[/bold]", "Tools ready:")
         for tool in self._tools:
             self._write_tools(f"- {tool['function']['name']}", f"- {tool['function']['name']}")
@@ -676,6 +678,7 @@ class ChatApp(App):
             self._orchestrator.reset_conversation()
             self._apply_runtime_system_prompt()
             await self._startup_diagnostics.render_connected_servers(self)
+            await self._startup_diagnostics.render_tool_exposure_warnings(self)
             self._is_ready = True
             self._write_chat("[green]Tools updated.[/green]", "Tools updated.")
             return True
@@ -724,6 +727,73 @@ class ChatApp(App):
                 f"[dim]Active tools: {len(self._available_tool_names)} (LLM max per request: {self._orchestrator._MAX_TOOLS_PER_LLM_REQUEST}).[/dim]",
                 f"Active tools: {len(self._available_tool_names)} (LLM max per request: {self._orchestrator._MAX_TOOLS_PER_LLM_REQUEST}).",
             )
+
+    def _show_last_tool_selection(self) -> None:
+        debug = self._orchestrator.last_tool_selection_debug() or self._last_tool_selection_debug
+        self._last_tool_selection_debug = dict(debug)
+        self._write_chat("[bold]Last tool selection:[/bold]", "Last tool selection:")
+        if not debug:
+            self._write_chat("- no tool selection has run yet", "- no tool selection has run yet")
+            return
+        active_domains = debug.get("active_domains") or []
+        protected_domains = debug.get("protected_domains") or []
+        selected_tools = debug.get("selected_tools") or []
+        pinned_tools = debug.get("pinned_tools") or []
+        suppressed_tools = debug.get("suppressed_tools") or []
+        suppressed_selected = debug.get("suppressed_selected_tools") or []
+        omitted_critical = debug.get("omitted_critical_tools") or []
+
+        self._write_chat(
+            f"- active domains: {self._format_debug_list(active_domains)}",
+            f"- active domains: {self._format_debug_list(active_domains)}",
+        )
+        self._write_chat(
+            f"- protected domains: {self._format_debug_list(protected_domains)}",
+            f"- protected domains: {self._format_debug_list(protected_domains)}",
+        )
+        self._write_chat(
+            f"- selected tools: {self._format_debug_list(selected_tools, limit=12)}",
+            f"- selected tools: {self._format_debug_list(selected_tools, limit=12)}",
+        )
+        self._write_chat(
+            f"- pinned tools: {self._format_debug_list(pinned_tools, limit=12)}",
+            f"- pinned tools: {self._format_debug_list(pinned_tools, limit=12)}",
+        )
+        self._write_chat(
+            f"- suppressed tools: {self._format_debug_list(suppressed_tools, limit=12)}",
+            f"- suppressed tools: {self._format_debug_list(suppressed_tools, limit=12)}",
+        )
+        self._write_chat(
+            f"- suppressed tools still selected: {self._format_debug_list(suppressed_selected, limit=8)}",
+            f"- suppressed tools still selected: {self._format_debug_list(suppressed_selected, limit=8)}",
+        )
+        self._write_chat(
+            f"- omitted critical tools: {self._format_debug_list(omitted_critical, limit=12)}",
+            f"- omitted critical tools: {self._format_debug_list(omitted_critical, limit=12)}",
+        )
+        self._write_chat(
+            (
+                "- selector stats: "
+                f"candidates={debug.get('index_candidate_count', 0)}, "
+                f"lexical_matches={debug.get('lexical_match_count', 0)}, "
+                f"fallback_added={debug.get('fallback_added_count', 0)}"
+            ),
+            (
+                "- selector stats: "
+                f"candidates={debug.get('index_candidate_count', 0)}, "
+                f"lexical_matches={debug.get('lexical_match_count', 0)}, "
+                f"fallback_added={debug.get('fallback_added_count', 0)}"
+            ),
+        )
+
+    @staticmethod
+    def _format_debug_list(values: Any, *, limit: int = 8) -> str:
+        if not isinstance(values, list) or not values:
+            return "(none)"
+        rendered = [str(item) for item in values[:limit]]
+        if len(values) > limit:
+            rendered.append(f"+{len(values) - limit} more")
+        return ", ".join(rendered)
 
     async def _render_connected_servers(self) -> None:
         await self._startup_diagnostics.render_connected_servers(self)
@@ -1218,6 +1288,15 @@ class ChatApp(App):
     async def _process_message(self, user_text: str, *, retried_after_tool_not_found: bool = False) -> None:
         self._turn_state = "RUNNING_LLM"
         self._write_chat("[dim]Processing request...[/dim]", "Processing request...")
+        strict_tool_facts_for_turn = (
+            self._config.strict_tool_facts
+            and not self._should_complete_multistep_tool_flow(user_text)
+        )
+        if self._config.strict_tool_facts and not strict_tool_facts_for_turn:
+            self._write_chat(
+                "[dim]Completing multi-step write flow before showing the result.[/dim]",
+                "Completing multi-step write flow before showing the result.",
+            )
 
         # Accumulator for streamed LLM tokens (reset each round)
         _stream_buf: list[str] = []
@@ -1271,11 +1350,15 @@ class ChatApp(App):
                 dropped_count = payload.get("dropped_count")
                 dropped_examples = payload.get("dropped_examples") or []
                 selection_debug = payload.get("selection_debug") or {}
+                if isinstance(selection_debug, dict):
+                    self._last_tool_selection_debug = dict(selection_debug)
                 examples_text = ""
                 if isinstance(dropped_examples, list) and dropped_examples:
                     preview = ", ".join(str(item) for item in dropped_examples[:4])
                     examples_text = f" dropped examples: {preview}"
                 debug_text = ""
+                domain_text = ""
+                critical_text = ""
                 if isinstance(selection_debug, dict) and selection_debug:
                     candidates = selection_debug.get("index_candidate_count")
                     lexical_matches = selection_debug.get("lexical_match_count")
@@ -1285,16 +1368,31 @@ class ChatApp(App):
                             f" candidates={candidates}, lexical_matches={lexical_matches},"
                             f" fallback_added={fallback_added}."
                         )
+                    active_domains = selection_debug.get("active_domains")
+                    if isinstance(active_domains, list) and active_domains:
+                        domain_text = " domains=" + ",".join(str(item) for item in active_domains[:5]) + "."
+                    pinned_tools = selection_debug.get("pinned_tools")
+                    if isinstance(pinned_tools, list) and pinned_tools:
+                        preview = ", ".join(str(item) for item in pinned_tools[:4])
+                        domain_text += f" pinned: {preview}."
+                    omitted_critical = selection_debug.get("omitted_critical_tools")
+                    if isinstance(omitted_critical, list) and omitted_critical:
+                        preview = ", ".join(str(item) for item in omitted_critical[:4])
+                        critical_text = f" omitted critical: {preview}."
+                    suppressed_tools = selection_debug.get("suppressed_tools")
+                    if isinstance(suppressed_tools, list) and suppressed_tools:
+                        preview = ", ".join(str(item) for item in suppressed_tools[:3])
+                        domain_text += f" suppressed: {preview}."
                 self._write_chat(
                     (
                         "[dim]Tool window trimmed for API limits: "
                         f"{selected_count}/{total_count} sent "
-                        f"({dropped_count} omitted).{debug_text}{examples_text}[/dim]"
+                        f"({dropped_count} omitted).{debug_text}{domain_text}{critical_text}{examples_text}[/dim]"
                     ),
                     (
                         "Tool window trimmed for API limits: "
                         f"{selected_count}/{total_count} sent "
-                        f"({dropped_count} omitted).{debug_text}{examples_text}"
+                        f"({dropped_count} omitted).{debug_text}{domain_text}{critical_text}{examples_text}"
                     ),
                 )
             elif kind == "llm_tools_retry_expanded":
@@ -1306,6 +1404,23 @@ class ChatApp(App):
                         f"(reason={reason}, tools={tool_count}).[/dim]"
                     ),
                     f"Retrying with expanded tool window (reason={reason}, tools={tool_count}).",
+                )
+            elif kind == "llm_tools_retry_domain_guardrail":
+                domains = payload.get("domains") or []
+                generic_tools = payload.get("generic_tool_names") or []
+                preferred_tools = payload.get("preferred_tool_names") or []
+                domain_text = ", ".join(str(item) for item in domains[:4]) if isinstance(domains, list) else str(domains)
+                generic_text = ", ".join(str(item) for item in generic_tools[:3]) if isinstance(generic_tools, list) else str(generic_tools)
+                preferred_text = ", ".join(str(item) for item in preferred_tools[:4]) if isinstance(preferred_tools, list) else str(preferred_tools)
+                self._write_chat(
+                    (
+                        "[yellow]Retrying tool choice:[/yellow] "
+                        f"{generic_text} is generic for {domain_text}; preferring {preferred_text}."
+                    ),
+                    (
+                        "Retrying tool choice: "
+                        f"{generic_text} is generic for {domain_text}; preferring {preferred_text}."
+                    ),
                 )
 
             elif kind == "tool_call_start":
@@ -1345,7 +1460,7 @@ class ChatApp(App):
             assistant_text, tool_events = await self._orchestrator.process(
                 user_text,
                 on_progress=_on_progress,
-                stop_after_tool_calls=self._config.strict_tool_facts,
+                stop_after_tool_calls=strict_tool_facts_for_turn,
             )
         except Exception as exc:
             self._write_chat(f"[red]LLM error: {exc}[/red]", f"LLM error: {exc}")
@@ -1371,7 +1486,7 @@ class ChatApp(App):
             if event.name == "editorial_ads_list_inventory" and not event.error
         ]
         recent_signal_lines = self._build_recent_signals_tool_grounded_lines(user_text, tool_events)
-        if recent_signal_lines and not self._config.strict_tool_facts:
+        if recent_signal_lines and not strict_tool_facts_for_turn:
             self._write_chat(
                 "[bold yellow]Tool-grounded recent signals:[/bold yellow] rendering exact rows from tool JSON.",
                 "Tool-grounded recent signals: rendering exact rows from tool JSON.",
@@ -1380,7 +1495,7 @@ class ChatApp(App):
                 self._write_chat(line, line)
             return
 
-        if editorial_inventory_events and not self._config.strict_tool_facts:
+        if editorial_inventory_events and not strict_tool_facts_for_turn:
             self._write_chat(
                 "[bold yellow]Tool-grounded editorial inventory listing:[/bold yellow] showing only extant entries from tool output.",
                 "Tool-grounded editorial inventory listing: showing only extant entries from tool output.",
@@ -1398,7 +1513,7 @@ class ChatApp(App):
             for event in tool_events
             if event.name == "editorial_ads_preview" and not event.error
         ]
-        if editorial_preview_events and not self._config.strict_tool_facts:
+        if editorial_preview_events and not strict_tool_facts_for_turn:
             self._write_chat(
                 "[bold yellow]Tool-grounded editorial preview response:[/bold yellow] showing exact preview URLs from tool output.",
                 "Tool-grounded editorial preview response: showing exact preview URLs from tool output.",
@@ -1411,7 +1526,7 @@ class ChatApp(App):
                     self._write_chat(line, line)
             return
 
-        if tool_events and self._config.strict_tool_facts:
+        if tool_events and strict_tool_facts_for_turn:
             self._write_chat(
                 "[bold yellow]Tool-grounded response mode:[/bold yellow] showing exact tool outputs (no model interpretation).",
                 "Tool-grounded response mode: showing exact tool outputs (no model interpretation).",
@@ -1476,6 +1591,52 @@ class ChatApp(App):
             return
 
         self._write_chat("[yellow]No response content returned.[/yellow]", "No response content returned.")
+
+    @staticmethod
+    def _should_complete_multistep_tool_flow(user_text: str) -> bool:
+        text = (user_text or "").lower()
+        mutation_terms = (
+            "add",
+            "append",
+            "create",
+            "draft",
+            "edit",
+            "generate",
+            "insert",
+            "materialize",
+            "move",
+            "save",
+            "stub",
+            "update",
+            "write",
+            "written",
+        )
+        if not any(term in text for term in mutation_terms):
+            return False
+
+        editorial_terms = (
+            "article",
+            "content file",
+            "dek",
+            "editorial",
+            "feature",
+            "frontmatter",
+            "hierarchy",
+            "issue",
+            "mdx",
+            "rubric",
+            "section",
+            "src/content/editorial",
+        )
+        newsletter_terms = (
+            "newsletter",
+            "food-for-thought",
+            "food for thought",
+            "dense-discovery",
+            "section schema",
+            "outbox",
+        )
+        return any(term in text for term in editorial_terms) or any(term in text for term in newsletter_terms)
 
     @staticmethod
     def _is_progress_monitored_tool(tool_name: str) -> bool:

@@ -66,6 +66,7 @@ class ToolArgumentPreflight:
             user_text=user_text,
         )
         self._workflow_repairs.preflight_workflows_import_from_artifact_arguments(tool_name, arguments)
+        self._normalize_editorial_content_write_arguments(tool_name, arguments)
         self._preflight_editorial_signal_lookup_arguments(tool_name, arguments)
         self._preflight_recent_signal_list_arguments(tool_name, arguments, user_text=user_text)
         self._preflight_editorial_signal_create_arguments(tool_name, user_text=user_text)
@@ -89,6 +90,24 @@ class ToolArgumentPreflight:
             user_text=user_text,
         )
         return tool_name, arguments, None
+
+    @classmethod
+    def _normalize_editorial_content_write_arguments(cls, tool_name: str, arguments: Dict[str, Any]) -> None:
+        if tool_name == "editorial_content_create_stub":
+            arguments.setdefault("profile", "practical")
+
+        if tool_name not in {
+            "editorial_content_apply_edits",
+            "editorial_content_create_stub",
+            "editorial_content_materialize_frontmatter_schema",
+            "editorial_content_sync_frontmatter_schema",
+        }:
+            return
+
+        if arguments.get("write") is not True:
+            return
+        arguments.setdefault("runChecks", True)
+        arguments.setdefault("enforceChecks", True)
 
     @classmethod
     def _preflight_editorial_signal_lookup_arguments(cls, tool_name: str, arguments: Dict[str, Any]) -> None:

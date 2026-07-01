@@ -451,6 +451,8 @@ def test_config_appends_prompt_policies(tmp_path):
     assert "always surface image IDs clearly" in cfg.system_prompt
     assert "convert natural color language to canonical RGB hex" in cfg.system_prompt
     assert "editorial_content_create_stub" in cfg.system_prompt
+    assert 'profile: "practical"' in cfg.system_prompt
+    assert "A temp draft is not completion" in cfg.system_prompt
     assert "Use source-repo read tools (or read-only file access)" in cfg.system_prompt
 
 
@@ -582,6 +584,49 @@ def test_process_message_does_not_duplicate_assistant_content(monkeypatch):
     asyncio.run(app._process_message("hi"))
 
     assert chat_lines.count("EDGAR: hello from model") == 1
+
+
+def test_process_message_editorial_article_write_completes_despite_strict_mode(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    chat_lines: list[str] = []
+    tool_lines: list[str] = []
+
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+    app._write_tools = lambda _markup, plain: tool_lines.append(plain)
+
+    async def _fake_process(user_text, on_progress=None, stop_after_tool_calls=False):  # noqa: ANN001
+        assert user_text == "Write an article draft for issue 1 in features."
+        assert stop_after_tool_calls is False
+        if on_progress:
+            on_progress("llm_request", {"round": 1})
+            on_progress(
+                "llm_response",
+                {
+                    "content": None,
+                    "tool_names": ["editorial_content_create_stub"],
+                    "tool_call_count": 1,
+                },
+            )
+        return (
+            "Created draft at src/content/editorial/features/issue/1/example.mdx.",
+            [
+                ToolEvent(
+                    name="editorial_content_create_stub",
+                    arguments={"title": "Example", "dryRun": True},
+                    result={"path": "src/content/editorial/features/issue/1/example.mdx"},
+                    error=None,
+                )
+            ],
+        )
+
+    app._orchestrator.process = _fake_process
+
+    asyncio.run(app._process_message("Write an article draft for issue 1 in features."))
+
+    assert any("Completing multi-step write flow" in line for line in chat_lines)
+    assert any(line.startswith("EDGAR: Created draft at") for line in chat_lines)
+    assert not any("Tool-grounded response mode" in line for line in chat_lines)
 
 
 def test_process_message_all_tool_failures_reports_failure(monkeypatch):
@@ -852,6 +897,7 @@ def test_help_command_outputs_command_list(monkeypatch):
     assert any("/status" in line for line in chat_lines)
     assert any("/reset" in line for line in chat_lines)
     assert any("/showtoolstate" in line for line in chat_lines)
+    assert any("/toolselection" in line for line in chat_lines)
     assert any("/turnon" in line for line in chat_lines)
     assert any("/turnoff" in line for line in chat_lines)
     assert any("/verbosity loud|lowkey|quiet" in line for line in chat_lines)
@@ -881,6 +927,33 @@ def test_toolstate_command_outputs_server_states(monkeypatch):
     assert handled is True
     assert any("Tool state (servers)" in line for line in chat_lines)
     assert any("comfy" in line for line in chat_lines)
+
+
+def test_toolselection_command_outputs_last_selector_debug(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    app = ChatApp(_config())
+    app._orchestrator._last_tool_selection_debug = {
+        "active_domains": ["newsletter"],
+        "protected_domains": ["newsletter"],
+        "selected_tools": ["newsletter_get", "newsletter_add_item", "workspace_file_read"],
+        "pinned_tools": ["newsletter_get", "newsletter_add_item"],
+        "suppressed_tools": ["workspace_file_write"],
+        "suppressed_selected_tools": [],
+        "omitted_critical_tools": [],
+        "index_candidate_count": 180,
+        "lexical_match_count": 6,
+        "fallback_added_count": 0,
+    }
+    chat_lines: list[str] = []
+    app._write_chat = lambda _markup, plain: chat_lines.append(plain)
+
+    handled = app._handle_local_command("/toolselection")
+
+    assert handled is True
+    assert any("Last tool selection:" in line for line in chat_lines)
+    assert any("active domains: newsletter" in line for line in chat_lines)
+    assert any("newsletter_add_item" in line for line in chat_lines)
+    assert any("workspace_file_write" in line for line in chat_lines)
 
 
 def test_turnoff_command_disables_server_and_triggers_reconnect(monkeypatch):

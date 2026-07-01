@@ -28,6 +28,58 @@ class _NoopBinaryTransfer:
 
 
 @pytest.mark.asyncio
+async def test_preflight_defaults_editorial_stubs_to_practical_profile() -> None:
+    preflight = ToolArgumentPreflight(_NoopWorkflowRepairs(), _NoopBinaryTransfer())
+    exec_name, exec_args, temp_file = await preflight.prepare_tool_execution(
+        orchestrator=object(),
+        tool_name="editorial_content_create_stub",
+        arguments={"title": "Example", "dryRun": True},
+        user_text="write an article draft",
+    )
+    assert exec_name == "editorial_content_create_stub"
+    assert exec_args["profile"] == "practical"
+    assert "runChecks" not in exec_args
+    assert temp_file is None
+
+
+@pytest.mark.asyncio
+async def test_preflight_adds_checks_to_editorial_write_tools() -> None:
+    preflight = ToolArgumentPreflight(_NoopWorkflowRepairs(), _NoopBinaryTransfer())
+    exec_name, exec_args, temp_file = await preflight.prepare_tool_execution(
+        orchestrator=object(),
+        tool_name="editorial_content_apply_edits",
+        arguments={"path": "src/content/editorial/features/issue/1/example.mdx", "setBody": "Draft", "write": True},
+        user_text="write an article draft",
+    )
+    assert exec_name == "editorial_content_apply_edits"
+    assert exec_args["runChecks"] is True
+    assert exec_args["enforceChecks"] is True
+    assert temp_file is None
+
+
+@pytest.mark.asyncio
+async def test_preflight_preserves_explicit_editorial_write_settings() -> None:
+    preflight = ToolArgumentPreflight(_NoopWorkflowRepairs(), _NoopBinaryTransfer())
+    exec_name, exec_args, temp_file = await preflight.prepare_tool_execution(
+        orchestrator=object(),
+        tool_name="editorial_content_create_stub",
+        arguments={
+            "title": "Example",
+            "profile": "full",
+            "write": True,
+            "runChecks": False,
+            "enforceChecks": False,
+        },
+        user_text="create a full-schema article stub",
+    )
+    assert exec_name == "editorial_content_create_stub"
+    assert exec_args["profile"] == "full"
+    assert exec_args["runChecks"] is False
+    assert exec_args["enforceChecks"] is False
+    assert temp_file is None
+
+
+@pytest.mark.asyncio
 async def test_preflight_blocks_digest_like_signal_lookup_id() -> None:
     preflight = ToolArgumentPreflight(_NoopWorkflowRepairs(), _NoopBinaryTransfer())
     with pytest.raises(RuntimeError, match="appears to be a digest id/path"):

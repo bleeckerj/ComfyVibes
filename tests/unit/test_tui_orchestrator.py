@@ -33,6 +33,17 @@ class FakeRouter:
         return {"name": name, "args": arguments}
 
 
+def _openai_tool(name: str, description: str = "") -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
 @dataclass
 class EchoLLM:
     async def chat(self, messages, tools):
@@ -370,6 +381,40 @@ class MissingOverridesVariationWorkflowRunLLM:
     async def chat(self, messages, tools):
         self.calls += 1
         if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(call_id="wf1", name="workflows_run", arguments={"workflow_id": "image_variation_maker"})
+                ],
+            )
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_stream(self, messages, tools, on_token=None):
+        return await self.chat(messages, tools)
+
+
+@dataclass
+class DownloadThenMissingOverridesVariationWorkflowRunLLM:
+    calls: int = 0
+
+    async def chat(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCall(
+                        call_id="dl1",
+                        name="photarium_download_image",
+                        arguments={
+                            "imageId": "src-variation-123",
+                            "savePath": "/tmp/source-image.png",
+                            "includeBase64": False,
+                        },
+                    )
+                ],
+            )
+        if self.calls == 2:
             return LLMResponse(
                 content=None,
                 tool_calls=[
@@ -2204,6 +2249,179 @@ async def test_strict_tanktracks_flow_extracts_outputs_from_watch_history():
 
 
 @pytest.mark.asyncio
+async def test_strict_variation_seed_sweep_bypasses_llm_and_runs_explicit_overrides():
+    @dataclass
+    class _LLM:
+        calls: int = 0
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            return LLMResponse(content="should not be called", tool_calls=[])
+
+        async def chat_stream(self, messages, tools, on_token=None):
+            self.calls += 1
+            return LLMResponse(content="should not be called", tool_calls=[])
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+        run_index: int = 0
+        upload_index: int = 0
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_get":
+                return {
+                    "imageId": "7d64bf7b-4cc4-442c-12ba-ab9b24b58e00",
+                    "parentId": "variation-parent-001",
+                    "namespace": "cf-default",
+                }
+            if name == "photarium_download_image":
+                return {"savedPath": "/tmp/variation_source.png"}
+            if name == "workflows_params_get":
+                return {
+                    "params": {
+                        "params": [
+                            {"name": "seed", "type": "int"},
+                            {"name": "filename_prefix", "type": "string"},
+                            {"name": "image", "type": "string"},
+                            {"name": "string", "type": "string"},
+                        ]
+                    }
+                }
+            if name == "workflows_run":
+                self.run_index += 1
+                return {
+                    "status": "complete",
+                    "output_images": [
+                        {
+                            "filename": f"variation_{self.run_index}.png",
+                            "local_path": f"/tmp/variation_{self.run_index}.png",
+                        }
+                    ],
+                }
+            if name == "photarium_upload_from_path":
+                self.upload_index += 1
+                return {"imageId": f"uploaded-var-{self.upload_index}", "parentId": payload.get("parentId")}
+            return {"ok": True}
+
+    llm = _LLM()
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_get",
+                    "description": "Get image metadata",
+                    "parameters": {"type": "object", "properties": {"imageId": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_params_get",
+                    "description": "Get workflow params",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"workflow_id": {"type": "string"}},
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                            "wait_timeout_s": {"type": "number"},
+                            "wait_poll_ms": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_upload_from_path",
+                    "description": "Upload image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "filePath": {"type": "string"},
+                            "parentId": {"type": "string"},
+                            "name": {"type": "string"},
+                            "namespace": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process(
+        "IMAGE VARIATION FLOW REQUEST\n"
+        "Run this as an agentic multi-step flow inside the TUI.\n\n"
+        "Source catalog image ID: 7d64bf7b-4cc4-442c-12ba-ab9b24b58e00\n"
+        "Requested upload target image ID: 7d64bf7b-4cc4-442c-12ba-ab9b24b58e00\n"
+        "Workflow preference: image_variation_maker\n"
+        "Image analysis prompt: emphasize the industrial shell and preserve the silhouette\n"
+        "Upscale request: not specified\n"
+        "Requested run count: 3\n"
+        "Sweep target: seed\n"
+        "Sweep values: none provided\n"
+        "Seed sweep values (randomized): 101, 202, 303\n"
+        "Additional variation instructions: none\n"
+    )
+
+    assert llm.calls == 0
+    assert "variation-parent-001" in answer
+    assert [event.name for event in events] == [
+        "photarium_get",
+        "photarium_download_image",
+        "workflows_params_get",
+        "workflows_run",
+        "photarium_upload_from_path",
+        "workflows_run",
+        "photarium_upload_from_path",
+        "workflows_run",
+        "photarium_upload_from_path",
+    ]
+
+    workflow_events = [event for event in events if event.name == "workflows_run"]
+    assert len(workflow_events) == 3
+    assert [event.arguments["overrides"]["seed"] for event in workflow_events] == [101, 202, 303]
+    assert all(event.arguments["overrides"]["image"] == "/tmp/variation_source.png" for event in workflow_events)
+    assert all(event.arguments["overrides"]["string"] == "emphasize the industrial shell and preserve the silhouette" for event in workflow_events)
+    assert len({event.arguments["overrides"]["filename_prefix"] for event in workflow_events}) == 3
+
+    upload_calls = [payload for name, payload in router.calls if name == "photarium_upload_from_path"]
+    assert len(upload_calls) == 3
+    assert all(call["parentId"] == "variation-parent-001" for call in upload_calls)
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_repairs_variation_workflows_run_with_downloaded_source_image():
     llm = MissingOverridesVariationWorkflowRunLLM()
 
@@ -2272,6 +2490,70 @@ async def test_orchestrator_repairs_variation_workflows_run_with_downloaded_sour
     assert router.calls[0][0] == "photarium_download_image"
     assert router.calls[0][1]["imageId"] == "7d64bf7b-4cc4-442c-12ba-ab9b24b58e00"
     assert router.calls[1][0] == "workflows_run"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_variation_workflows_run_from_prior_downloaded_local_path():
+    llm = DownloadThenMissingOverridesVariationWorkflowRunLLM()
+    expected_path = str(Path("/tmp/source-image.png").resolve())
+
+    @dataclass
+    class _Router:
+        calls: list[tuple[str, dict]]
+
+        async def call_tool(self, name, arguments):
+            payload = dict(arguments or {})
+            self.calls.append((name, payload))
+            if name == "photarium_download_image":
+                return {"savedPath": "/tmp/source-image.png"}
+            return {"ok": True}
+
+    router = _Router(calls=[])
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "workflows_run",
+                    "description": "Run workflow",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "workflow_id": {"type": "string"},
+                            "overrides": {"type": "object"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "photarium_download_image",
+                    "description": "Download image",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "imageId": {"type": "string"},
+                            "savePath": {"type": "string"},
+                            "includeBase64": {"type": "boolean"},
+                        },
+                    },
+                },
+            },
+        ]
+    )
+
+    answer, events = await orch.process("Run the variation workflow again with the restored local source image.")
+
+    assert answer == "done"
+    assert [event.name for event in events] == ["photarium_download_image", "workflows_run"]
+    assert events[1].error is None
+    assert events[1].arguments["workflow_id"] == "image_variation_maker"
+    assert events[1].arguments["overrides"]["image"] == expected_path
+    assert router.calls[0][0] == "photarium_download_image"
+    assert router.calls[1][0] == "workflows_run"
+    assert router.calls[1][1]["overrides"]["image"] == expected_path
 
 
 @pytest.mark.asyncio
@@ -3091,3 +3373,77 @@ async def test_orchestrator_uses_recent_context_for_tool_window_selection():
     assert events == []
     assert llm.seen_tool_names is not None
     assert "digester_signals_create" in llm.seen_tool_names
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_retries_protected_domain_generic_file_write_before_execution():
+    class GenericFileThenNewsletterLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.corrective_note_seen = False
+
+        async def chat(self, messages, tools):
+            self.calls += 1
+            self.corrective_note_seen = self.corrective_note_seen or any(
+                message.get("role") == "system"
+                and "domain MCP tools" in str(message.get("content", ""))
+                for message in messages
+            )
+            if self.calls == 1:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            call_id="generic",
+                            name="workspace_file_write",
+                            arguments={"path": "drafts/newsletter.json", "content": "{}"},
+                        )
+                    ],
+                )
+            if self.calls == 2:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(
+                            call_id="newsletter",
+                            name="newsletter_add_item",
+                            arguments={"issue_id": "w19-y26", "section": "food-for-thought"},
+                        )
+                    ],
+                )
+            return LLMResponse(content="done", tool_calls=[])
+
+        async def chat_stream(self, messages, tools, on_token=None):
+            return await self.chat(messages, tools)
+
+    class ToolCallRecordingRouter:
+        def __init__(self) -> None:
+            self.names: list[str] = []
+
+        async def call_tool(self, name, arguments):
+            self.names.append(name)
+            return {"ok": True}
+
+    llm = GenericFileThenNewsletterLLM()
+    router = ToolCallRecordingRouter()
+    orch = ChatOrchestrator("system", llm, router)
+    orch.set_tools(
+        [
+            _openai_tool("workspace_file_write", "Write a workspace file"),
+            _openai_tool("newsletter_get", "Load newsletter draft"),
+            _openai_tool("newsletter_get_section_schema", "Get newsletter section schema"),
+            _openai_tool("newsletter_add_item", "Add newsletter item"),
+        ]
+    )
+    progress_events: list[tuple[str, dict]] = []
+
+    answer, events = await orch.process(
+        "Add a food-for-thought item to newsletter issue w19-y26",
+        on_progress=lambda kind, payload: progress_events.append((kind, payload)),
+    )
+
+    assert answer == "done"
+    assert router.names == ["newsletter_add_item"]
+    assert [event.name for event in events] == ["newsletter_add_item"]
+    assert llm.corrective_note_seen is True
+    assert any(kind == "llm_tools_retry_domain_guardrail" for kind, _payload in progress_events)

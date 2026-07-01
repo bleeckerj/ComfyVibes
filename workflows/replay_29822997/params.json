@@ -1,0 +1,295 @@
+{
+  "schema_version": "1",
+  "workflow_id": "replay_29822997",
+  "workflow_hash": "3733355aea41652ad81734c38cb20c80b7767989c8ac3a763514a3e6988c94d9",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 380167238047679,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 25,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "EmptySD3LatentImage.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "19",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "Use image 1 as the base photo. Replace ONLY the content inside the printed photograph so that it matches image 2 exactly (same scene, composition, colors). Keep the lighting, perspective, and background from image 1 unchanged. The inserted image must appear as a real printed 3x2 photo with correct paper edges and slight gloss, aligned to the original photo plane.",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "33",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "euler",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "beta",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "16",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "3:2 (Golden Landscape)",
+      "required": false,
+      "description": "Flux Resolution Calc.aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "aspect_ratio"
+      }
+    },
+    {
+      "name": "clip_name1",
+      "type": "string",
+      "default": "t5xxl_fp16.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name1",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "clip_name1"
+      }
+    },
+    {
+      "name": "clip_name2",
+      "type": "string",
+      "default": "clip_l.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name2",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "clip_name2"
+      }
+    },
+    {
+      "name": "custom_aspect_ratio",
+      "type": "string",
+      "default": "1216:832",
+      "required": false,
+      "description": "Flux Resolution Calc.custom_aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "custom_aspect_ratio"
+      }
+    },
+    {
+      "name": "custom_ratio",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "description": "Flux Resolution Calc.custom_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "custom_ratio"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "DualCLIPLoader.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "device"
+      }
+    },
+    {
+      "name": "divisible_by",
+      "type": "string",
+      "default": "64",
+      "required": false,
+      "description": "Flux Resolution Calc.divisible_by",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "divisible_by"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "exactReplaceAnimalWith77588002_20260307_0010",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "21",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "guidance",
+      "type": "int",
+      "default": 2,
+      "required": false,
+      "description": "FluxGuidance.guidance",
+      "target": {
+        "mode": "direct",
+        "node_id": "32",
+        "input": "guidance"
+      }
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "default": "handHoldingPhoto_3x2_20260306_2353_00012_.png",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "2",
+        "input": "image"
+      }
+    },
+    {
+      "name": "image_2",
+      "type": "string",
+      "default": "flux2Klein4B_removeWingsHeavierTracks_bcb06255_seed40198914758768_run03_20260306_0018_00007_.png",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "image"
+      }
+    },
+    {
+      "name": "megapixel",
+      "type": "string",
+      "default": "1.0",
+      "required": false,
+      "description": "Flux Resolution Calc.megapixel",
+      "target": {
+        "mode": "direct",
+        "node_id": "23",
+        "input": "megapixel"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "flux",
+      "required": false,
+      "description": "DualCLIPLoader.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "flux1-dev-kontext_fp8_scaled.safetensors",
+      "required": false,
+      "description": "Load Diffusion Model.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "36",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "ae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "11",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load Diffusion Model.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "36",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

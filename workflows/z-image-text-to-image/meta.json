@@ -1,0 +1,55 @@
+{
+  "id": "z-image-text-to-image-2",
+  "name": "z-image-text-to-image-2",
+  "description": "test",
+  "tags": [
+    "text-to-image"
+  ],
+  "created_at": "2026-03-03T04:47:35.262967+00:00",
+  "updated_at": "2026-03-03T04:47:35.262990+00:00",
+  "workflow_hash": "e4b7d2d7753ea29519c94acf94a2aa0ef6be45fc9126c20aa2d12880174c0b4f",
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "prompt",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "megapixel",
+      "shift",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

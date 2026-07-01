@@ -64,6 +64,11 @@ _DIGEST_SIGNAL_RECENT = {
     "editorial_signals_create",
     "editorial_create_ad_hoc_signal",
 }
+_SIGNAL_READ_TOOLS = frozenset(
+    name
+    for name in _DIGEST_SIGNAL_RECENT
+    if "signals_create" not in name and "create_ad_hoc_signal" not in name
+)
 _DIGEST_TERMS = ("digest", "digests")
 _SIGNAL_TERMS = ("signal", "signals")
 _LATEST_TERMS = ("latest", "recent", "newest", "last")
@@ -85,8 +90,293 @@ _CONTENT_DRAFT_TOOLS = {
     "editorial_content_open_for_editing",
     "editorial_content_list",
 }
+_EDITORIAL_CONTENT_TERMS = (
+    "article",
+    "articles",
+    "content file",
+    "dek",
+    "editorial",
+    "essay",
+    "feature",
+    "features",
+    "frontmatter",
+    "mdx",
+    "rubric",
+    "stub",
+)
+_NEWSLETTER_TOOLS = {
+    # Backoffice stdio surface.
+    "newsletter_get",
+    "newsletter_start",
+    "newsletter_get_section_schema",
+    "newsletter_add_item",
+    "newsletter_add_digest",
+    "newsletter_add_signal",
+    "newsletter_add_section",
+    "newsletter_update_section",
+    "newsletter_edit_meta",
+    "newsletter_validate",
+    "newsletter_save",
+    "newsletter_remove_item",
+    "newsletter_suggest_images",
+    "newsletter_set_item_image",
+    "suggest_newsletter_items",
+    "format_food_for_thought",
+    "format_apps_sites",
+    "get_section_types",
+    "create_newsletter_from_skeleton",
+    # Backoffice HTTP surface.
+    "backoffice_newsletter_get",
+    "backoffice_newsletter_start",
+    "backoffice_newsletter_get_section_schema",
+    "backoffice_newsletter_add_item",
+    "backoffice_newsletter_add_digest",
+    "backoffice_newsletter_add_signal",
+    "backoffice_newsletter_add_section",
+    "backoffice_newsletter_update_section",
+    "backoffice_newsletter_edit_meta",
+    "backoffice_newsletter_validate",
+    "backoffice_newsletter_save",
+    "backoffice_newsletter_remove_item",
+    "backoffice_newsletter_suggest_images",
+    "backoffice_newsletter_set_item_image",
+    "backoffice_suggest_newsletter_items",
+    "backoffice_format_food_for_thought",
+    "backoffice_format_apps_sites",
+    "backoffice_get_section_types",
+    "backoffice_create_newsletter_from_skeleton",
+}
+_NEWSLETTER_MUTATION_TOOLS = {
+    name
+    for name in _NEWSLETTER_TOOLS
+    if any(token in name for token in ("add_", "start", "edit_", "update_", "save", "remove_", "set_item_image", "create_newsletter"))
+}
+_NEWSLETTER_TERMS = (
+    "newsletter",
+    "newsletters",
+    "food-for-thought",
+    "food for thought",
+    "apps-sites",
+    "section type",
+    "section schema",
+    "issue id",
+    "outbox",
+    "dense-discovery",
+)
 
 _ISSUE_NUMBER_RE = re.compile(r"\bissue\s+\d+\b", re.IGNORECASE)
+_NEWSLETTER_ISSUE_ID_RE = re.compile(r"\b(?:mw|w)\d{1,2}-y\d{2}\b", re.IGNORECASE)
+_WORKFLOW_TERMS = (
+    "workflow",
+    "workflows",
+    "comfy",
+    "comfyui",
+    "queue",
+    "history",
+    "node",
+    "nodes",
+    "model",
+    "corpus",
+    "artifact",
+    "image edit",
+    "aspect ratio",
+)
+_WORKFLOW_TOOLS = {
+    "workflows_search",
+    "workflows_list",
+    "workflows_get",
+    "workflows_params_get",
+    "workflows_run",
+    "workflows_watch",
+    "workflows_wait",
+    "workflows_import_from_artifact",
+    "workflows_extract_from_artifact",
+    "workflows_run_aspect_ratio_adjustment",
+    "comfy_download_image",
+    "comfy_get_history",
+    "comfy_queue_prompt",
+}
+_PHOTARIUM_TERMS = (
+    "photarium",
+    "catalog",
+    "image id",
+    "image_id",
+    "namespace",
+    "upload",
+    "variant",
+    "variants",
+    "asset",
+    "assets",
+)
+_PHOTARIUM_TOOLS = {
+    "photarium_search",
+    "photarium_get",
+    "photarium_download_image",
+    "photarium_upload_url",
+    "photarium_upload_from_path",
+    "photarium_update_metadata",
+    "catalog_search",
+    "catalog_get",
+}
+_EDITORIAL_AD_TERMS = (
+    "ad",
+    "ads",
+    "advertising",
+    "campaign",
+    "inventory",
+    "preview ad",
+    "social snapshot",
+    "sponsorship",
+)
+_EDITORIAL_AD_TOOLS = {
+    "editorial_ads_list",
+    "editorial_ads_preview",
+    "editorial_ads_preview_by_index",
+    "editorial_ads_inventory",
+    "editorial_ads_search",
+    "editorial_ads_validate",
+    "editorial_social_snapshot",
+}
+_BACKOFFICE_CONTENT_TERMS = (
+    "backoffice",
+    "content pack",
+    "content source",
+    "source pack",
+    "brief pack",
+    "cms",
+)
+_BACKOFFICE_CONTENT_TOOLS = {
+    "backoffice_content_get",
+    "backoffice_content_search",
+    "backoffice_content_update",
+    "backoffice_content_create",
+    "backoffice_sources_get",
+    "backoffice_sources_search",
+}
+_WORKSPACE_TERMS = (
+    "workspace",
+    "file",
+    "files",
+    "path",
+    "directory",
+    "read file",
+    "write file",
+)
+_WORKSPACE_TOOLS = {
+    "workspace_file_read",
+    "workspace_file_write",
+    "workspace_file_list",
+    "workspace_file_search",
+    "workspace_file_copy",
+    "workspace_file_move",
+    "workspace_file_delete",
+}
+_GENERIC_MUTATING_FILE_TOOLS = frozenset(
+    {
+        "workspace_file_write",
+        "workspace_file_copy",
+        "workspace_file_move",
+        "workspace_file_delete",
+        "workflows_file_write",
+        "workflows_file_copy",
+        "workflows_file_move",
+        "workflows_file_delete",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ToolDomain:
+    name: str
+    intent_terms: tuple[str, ...] = ()
+    intent_regexes: tuple[re.Pattern[str], ...] = ()
+    pinned_tool_names: frozenset[str] = frozenset()
+    preferred_tool_names: frozenset[str] = frozenset()
+    suppressed_tool_names: frozenset[str] = frozenset()
+    suppressed_prefixes: tuple[str, ...] = ()
+    recent_tool_names: frozenset[str] = frozenset()
+    protected: bool = False
+
+
+@dataclass(frozen=True)
+class ToolDomainMatch:
+    domain: ToolDomain
+    reasons: tuple[str, ...]
+
+
+_DOMAIN_REGISTRY = (
+    ToolDomain(
+        name="newsletter",
+        intent_terms=_NEWSLETTER_TERMS,
+        intent_regexes=(_NEWSLETTER_ISSUE_ID_RE,),
+        pinned_tool_names=frozenset(_NEWSLETTER_TOOLS),
+        preferred_tool_names=frozenset(_NEWSLETTER_TOOLS),
+        suppressed_tool_names=_GENERIC_MUTATING_FILE_TOOLS,
+        suppressed_prefixes=("workspace_file_",),
+        recent_tool_names=frozenset(_NEWSLETTER_TOOLS),
+        protected=True,
+    ),
+    ToolDomain(
+        name="digests",
+        intent_terms=_DIGEST_TERMS,
+        pinned_tool_names=frozenset(_DIGEST_HANDOFF_RECENT),
+        preferred_tool_names=frozenset(_DIGEST_HANDOFF_RECENT),
+        recent_tool_names=frozenset(_DIGEST_HANDOFF_RECENT),
+    ),
+    ToolDomain(
+        name="signals",
+        intent_terms=_SIGNAL_TERMS,
+        pinned_tool_names=_SIGNAL_READ_TOOLS,
+        preferred_tool_names=frozenset(_DIGEST_SIGNAL_RECENT),
+        recent_tool_names=frozenset(_DIGEST_SIGNAL_RECENT),
+    ),
+    ToolDomain(
+        name="workflows",
+        intent_terms=_WORKFLOW_TERMS,
+        pinned_tool_names=frozenset(_WORKFLOW_TOOLS),
+        preferred_tool_names=frozenset(_WORKFLOW_TOOLS),
+        recent_tool_names=frozenset(_WORKFLOW_TOOLS),
+    ),
+    ToolDomain(
+        name="photarium",
+        intent_terms=_PHOTARIUM_TERMS,
+        pinned_tool_names=frozenset(_PHOTARIUM_TOOLS),
+        preferred_tool_names=frozenset(_PHOTARIUM_TOOLS),
+        recent_tool_names=frozenset(_PHOTARIUM_TOOLS),
+    ),
+    ToolDomain(
+        name="editorial_content",
+        intent_terms=_EDITORIAL_CONTENT_TERMS + ("src/content", "content file"),
+        intent_regexes=(_ISSUE_NUMBER_RE,),
+        pinned_tool_names=frozenset(_CONTENT_DRAFT_TOOLS),
+        preferred_tool_names=frozenset(_CONTENT_DRAFT_TOOLS),
+        suppressed_tool_names=_GENERIC_MUTATING_FILE_TOOLS,
+        suppressed_prefixes=("workspace_file_",),
+        recent_tool_names=frozenset(_CONTENT_DRAFT_TOOLS),
+        protected=True,
+    ),
+    ToolDomain(
+        name="editorial_ads",
+        intent_terms=_EDITORIAL_AD_TERMS,
+        pinned_tool_names=frozenset(_EDITORIAL_AD_TOOLS),
+        preferred_tool_names=frozenset(_EDITORIAL_AD_TOOLS),
+        recent_tool_names=frozenset(_EDITORIAL_AD_TOOLS),
+    ),
+    ToolDomain(
+        name="backoffice_content",
+        intent_terms=_BACKOFFICE_CONTENT_TERMS,
+        pinned_tool_names=frozenset(_BACKOFFICE_CONTENT_TOOLS),
+        preferred_tool_names=frozenset(_BACKOFFICE_CONTENT_TOOLS),
+        recent_tool_names=frozenset(_BACKOFFICE_CONTENT_TOOLS),
+    ),
+    ToolDomain(
+        name="workspace",
+        intent_terms=_WORKSPACE_TERMS,
+        pinned_tool_names=frozenset({"workspace_file_read", "workspace_file_list", "workspace_file_search"}),
+        preferred_tool_names=frozenset(_WORKSPACE_TOOLS),
+        recent_tool_names=frozenset(_WORKSPACE_TOOLS),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -112,7 +402,7 @@ class ToolSelector:
             if card.name
         }
         self._token_to_tool_indexes, self._token_idf = self._build_lexical_index(self._cards)
-        self.last_selection_debug: Dict[str, int] = {}
+        self.last_selection_debug: Dict[str, Any] = {}
 
     def select_tools_for_user_text(
         self,
@@ -122,16 +412,33 @@ class ToolSelector:
         *,
         context_text: str | None = None,
     ) -> List[Dict[str, Any]]:
+        text = self._build_selection_text(user_text=user_text, context_text=context_text)
+        active_domain_matches = self.classify_domains(text=text, recent_tool_names=recent_tool_names)
+        pinned_indexes = self._collect_pinned_tool_indexes(
+            text=text,
+            recent_tool_names=recent_tool_names,
+            active_domain_matches=active_domain_matches,
+        )
+        preferred_indexes = self._collect_preferred_tool_indexes(active_domain_matches=active_domain_matches)
+        suppressed_indexes = self._collect_suppressed_tool_indexes(active_domain_matches=active_domain_matches)
         if len(self._tools) <= max_tools_per_request:
+            selected_indexes = list(range(len(self._tools)))
             self.last_selection_debug = {
                 "query_token_count": 0,
                 "lexical_match_count": len(self._tools),
                 "index_candidate_count": len(self._tools),
                 "fallback_added_count": 0,
             }
+            self.last_selection_debug.update(
+                self._build_domain_debug(
+                    active_domain_matches=active_domain_matches,
+                    pinned_indexes=pinned_indexes,
+                    suppressed_indexes=suppressed_indexes,
+                    selected_indexes=selected_indexes,
+                )
+            )
             return self._tools
 
-        text = self._build_selection_text(user_text=user_text, context_text=context_text)
         query_tokens = self._tokenize(text)
         lexical_scores = self._score_lexical_matches(query_tokens)
         candidate_indexes = self._retrieve_candidate_indexes(
@@ -144,6 +451,8 @@ class ToolSelector:
             text=text,
             recent_tool_names=recent_tool_names,
             lexical_scores=lexical_scores,
+            preferred_indexes=preferred_indexes,
+            suppressed_indexes=suppressed_indexes,
         )
 
         selected_indexes = list(ranked_candidate_indexes[:max_tools_per_request])
@@ -157,6 +466,8 @@ class ToolSelector:
                     text=text,
                     recent_tool_names=recent_tool_names,
                     lexical_scores=lexical_scores,
+                    preferred_indexes=preferred_indexes,
+                    suppressed_indexes=suppressed_indexes,
                 )
                 if index not in selected_set
             ]
@@ -179,12 +490,78 @@ class ToolSelector:
             recent_tool_names=recent_tool_names,
             lexical_scores=lexical_scores,
             max_tools_per_request=max_tools_per_request,
+            pinned_indexes=pinned_indexes,
+            preferred_indexes=preferred_indexes,
+            suppressed_indexes=suppressed_indexes,
         )
-        self.last_selection_debug["pinned_included_count"] = max(
-            0,
-            len(self._collect_pinned_tool_indexes(text=text, recent_tool_names=recent_tool_names).intersection(set(selected_indexes))),
+        self.last_selection_debug.update(
+            self._build_domain_debug(
+                active_domain_matches=active_domain_matches,
+                pinned_indexes=pinned_indexes,
+                suppressed_indexes=suppressed_indexes,
+                selected_indexes=selected_indexes,
+            )
         )
         return [self._tools[index] for index in selected_indexes[:max_tools_per_request]]
+
+    @classmethod
+    def classify_domains(cls, *, text: str, recent_tool_names: set[str] | None = None) -> list[ToolDomainMatch]:
+        recent = recent_tool_names or set()
+        lowered = (text or "").lower()
+        matches: list[ToolDomainMatch] = []
+        has_newsletter_intent = cls._has_newsletter_intent(lowered)
+
+        for domain in _DOMAIN_REGISTRY:
+            reasons: list[str] = []
+            if domain.name == "newsletter" and has_newsletter_intent:
+                reasons.append("newsletter_intent")
+            elif domain.name == "editorial_content":
+                if cls._has_editorial_content_intent(lowered) and not has_newsletter_intent:
+                    reasons.append("editorial_content_intent")
+            else:
+                for term in domain.intent_terms:
+                    if term and term in lowered:
+                        reasons.append(f"term:{term}")
+                        if len(reasons) >= 3:
+                            break
+                for pattern in domain.intent_regexes:
+                    if pattern.search(lowered):
+                        reasons.append(f"regex:{pattern.pattern}")
+                        break
+
+            recent_matches = sorted(recent.intersection(domain.recent_tool_names))
+            if recent_matches:
+                reasons.append(f"recent:{recent_matches[0]}")
+
+            if reasons:
+                matches.append(ToolDomainMatch(domain=domain, reasons=tuple(reasons[:4])))
+        return matches
+
+    @classmethod
+    def protected_domain_names(cls) -> set[str]:
+        return {domain.name for domain in _DOMAIN_REGISTRY if domain.protected}
+
+    @classmethod
+    def is_generic_mutating_file_tool(cls, name: str) -> bool:
+        return name in _GENERIC_MUTATING_FILE_TOOLS
+
+    @staticmethod
+    def _has_newsletter_intent(text: str) -> bool:
+        return any(term in text for term in _NEWSLETTER_TERMS) or bool(_NEWSLETTER_ISSUE_ID_RE.search(text))
+
+    @staticmethod
+    def _has_editorial_content_intent(text: str) -> bool:
+        has_feature_intent = "feature" in text or "features" in text
+        has_issue_intent = bool(_ISSUE_NUMBER_RE.search(text))
+        return (
+            any(term in text for term in _EDITORIAL_CONTENT_TERMS)
+            or has_feature_intent
+            or (
+                has_issue_intent
+                and any(term in text for term in ("create", "draft", "write", "written"))
+            )
+            or "src/content" in text
+        )
 
     @staticmethod
     def _build_selection_text(*, user_text: str, context_text: str | None = None) -> str:
@@ -210,9 +587,37 @@ class ToolSelector:
         has_explicit_create_intent = any(
             token in text for token in ("create", "add", "ingest", "record", "ad hoc", "ad-hoc")
         )
+        has_newsletter_intent = any(term in text for term in _NEWSLETTER_TERMS) or bool(
+            _NEWSLETTER_ISSUE_ID_RE.search(text)
+        )
         has_feature_intent = "feature" in text or "features" in text
         has_issue_intent = bool(_ISSUE_NUMBER_RE.search(text))
-        has_content_intent = has_feature_intent or has_issue_intent or "src/content" in text
+        has_editorial_article_intent = (
+            any(term in text for term in _EDITORIAL_CONTENT_TERMS)
+            or has_feature_intent
+            or (
+                has_issue_intent
+                and any(term in text for term in ("create", "draft", "write", "written"))
+            )
+            or "src/content" in text
+        )
+        has_content_intent = has_editorial_article_intent and not has_newsletter_intent
+        has_newsletter_mutation_intent = has_newsletter_intent and any(
+            token in text
+            for token in (
+                "add",
+                "append",
+                "create",
+                "edit",
+                "insert",
+                "merge",
+                "remove",
+                "save",
+                "start",
+                "update",
+                "validate",
+            )
+        )
 
         # Namespace bias: Digester tools should handle digest/signal retrieval. The legacy `editorial_*`
         # wrappers still exist, but we should not prefer them unless the user is explicitly in that context.
@@ -258,6 +663,24 @@ class ToolSelector:
                 score += 700
             if name in {"editorial_draft_generate", "digester_generate_draft"} or "draft_generate" in name:
                 score -= 260
+
+        if has_newsletter_intent:
+            if name in _NEWSLETTER_TOOLS:
+                score += 780
+            if "newsletter" in name:
+                score += 220
+            if "food" in text and "thought" in text and "food_for_thought" in name:
+                score += 240
+            if "section" in text and ("section_schema" in name or "get_section_types" in name):
+                score += 220
+            if "schema" in text and "section_schema" in name:
+                score += 260
+            if ("get" in text or "load" in text or "open" in text) and name.endswith("newsletter_get"):
+                score += 220
+            if has_newsletter_mutation_intent and name in _NEWSLETTER_MUTATION_TOOLS:
+                score += 180
+            if name.startswith("workspace_file_"):
+                score -= 360
 
         if (has_digest_intent or has_signal_intent) and has_extract_intent:
             if "signals_create" in name or "create_ad_hoc_signal" in name:
@@ -318,7 +741,17 @@ class ToolSelector:
                 score += 120
         elif name.startswith("backoffice_"):
             score += 10
-            if any(term in text for term in ("backoffice", "ticket", "crm", "finance")):
+            if any(term in text for term in ("backoffice", "ticket", "crm", "finance", "newsletter")):
+                score += 120
+        elif name.startswith("newsletter_") or name in {
+            "suggest_newsletter_items",
+            "format_food_for_thought",
+            "format_apps_sites",
+            "get_section_types",
+            "create_newsletter_from_skeleton",
+        }:
+            score += 10
+            if has_newsletter_intent:
                 score += 120
         return score
 
@@ -490,11 +923,19 @@ class ToolSelector:
         text: str,
         recent_tool_names: set[str],
         lexical_scores: dict[int, float],
+        preferred_indexes: set[int] | None = None,
+        suppressed_indexes: set[int] | None = None,
     ) -> list[int]:
+        preferred = preferred_indexes or set()
+        suppressed = suppressed_indexes or set()
         ranked: list[tuple[float, float, int, int]] = []
         for index in indexes:
             card = self._cards[index]
             priority = self.tool_priority(name=card.name, text=text, recent_tool_names=recent_tool_names)
+            if index in preferred:
+                priority += 95
+            if index in suppressed:
+                priority -= 2_000
             lexical = lexical_scores.get(index, 0.0)
             combined = float(priority) + (lexical * self._LEXICAL_SCORE_WEIGHT)
             ranked.append((combined, lexical, priority, index))
@@ -510,17 +951,22 @@ class ToolSelector:
         recent_tool_names: set[str],
         lexical_scores: dict[int, float],
         max_tools_per_request: int,
+        pinned_indexes: set[int] | None = None,
+        preferred_indexes: set[int] | None = None,
+        suppressed_indexes: set[int] | None = None,
     ) -> list[int]:
         if not selected_indexes:
             return selected_indexes
-        pinned_indexes = sorted(
-            self._collect_pinned_tool_indexes(text=text, recent_tool_names=recent_tool_names)
+        effective_pinned_indexes = sorted(
+            pinned_indexes
+            if pinned_indexes is not None
+            else self._collect_pinned_tool_indexes(text=text, recent_tool_names=recent_tool_names)
         )
-        if not pinned_indexes:
+        if not effective_pinned_indexes:
             return selected_indexes
 
         selected_set = set(selected_indexes)
-        missing = [index for index in pinned_indexes if index not in selected_set]
+        missing = [index for index in effective_pinned_indexes if index not in selected_set]
         if not missing:
             return selected_indexes
 
@@ -529,8 +975,11 @@ class ToolSelector:
             text=text,
             recent_tool_names=recent_tool_names,
             lexical_scores=lexical_scores,
+            preferred_indexes=preferred_indexes,
+            suppressed_indexes=suppressed_indexes,
         )
-        removable = [index for index in reversed(selected_ranked) if index not in pinned_indexes]
+        effective_pinned_set = set(effective_pinned_indexes)
+        removable = [index for index in reversed(selected_ranked) if index not in effective_pinned_set]
 
         updated = list(selected_indexes)
         for pinned_index in missing:
@@ -546,7 +995,13 @@ class ToolSelector:
                 selected_set.add(pinned_index)
         return updated
 
-    def _collect_pinned_tool_indexes(self, *, text: str, recent_tool_names: set[str]) -> set[int]:
+    def _collect_pinned_tool_indexes(
+        self,
+        *,
+        text: str,
+        recent_tool_names: set[str],
+        active_domain_matches: list[ToolDomainMatch] | None = None,
+    ) -> set[int]:
         pinned_names: set[str] = set()
         has_digest_intent = any(term in text for term in _DIGEST_TERMS)
         has_signal_intent = any(term in text for term in _SIGNAL_TERMS)
@@ -558,11 +1013,39 @@ class ToolSelector:
         has_explicit_create_intent = any(
             token in text for token in ("create", "add", "ingest", "record", "ad hoc", "ad-hoc")
         )
+        has_newsletter_intent = any(term in text for term in _NEWSLETTER_TERMS) or bool(
+            _NEWSLETTER_ISSUE_ID_RE.search(text)
+        )
         has_feature_intent = "feature" in text or "features" in text
         has_issue_intent = bool(_ISSUE_NUMBER_RE.search(text))
-        has_content_intent = has_feature_intent or has_issue_intent or "src/content" in text
+        has_editorial_article_intent = (
+            any(term in text for term in _EDITORIAL_CONTENT_TERMS)
+            or has_feature_intent
+            or (
+                has_issue_intent
+                and any(term in text for term in ("create", "draft", "write", "written"))
+            )
+            or "src/content" in text
+        )
+        has_content_intent = has_editorial_article_intent and not has_newsletter_intent
 
-        if not has_editorial_context and not has_digest_intent and not has_signal_intent:
+        matches = active_domain_matches
+        if matches is None:
+            matches = self.classify_domains(text=text, recent_tool_names=recent_tool_names)
+
+        for match in matches:
+            pinned_names.update(match.domain.pinned_tool_names)
+
+        if matches:
+            pinned_names.update({"list_tools", "tool_schema_get"})
+
+        if (
+            not matches
+            and not has_editorial_context
+            and not has_digest_intent
+            and not has_signal_intent
+            and not has_newsletter_intent
+        ):
             return set()
 
         if has_digest_intent or recent_tool_names.intersection(_DIGEST_HANDOFF_RECENT):
@@ -618,9 +1101,85 @@ class ToolSelector:
         if has_content_intent:
             pinned_names.update(_CONTENT_DRAFT_TOOLS)
 
+        if has_newsletter_intent:
+            pinned_names.update(_NEWSLETTER_TOOLS)
+
         indexes: set[int] = set()
         for name in pinned_names:
             index = self._tool_index_by_name.get(name)
             if index is not None:
                 indexes.add(index)
         return indexes
+
+    def _collect_preferred_tool_indexes(self, *, active_domain_matches: list[ToolDomainMatch]) -> set[int]:
+        indexes: set[int] = set()
+        for match in active_domain_matches:
+            for name in match.domain.preferred_tool_names:
+                index = self._tool_index_by_name.get(name)
+                if index is not None:
+                    indexes.add(index)
+        return indexes
+
+    def _collect_suppressed_tool_indexes(self, *, active_domain_matches: list[ToolDomainMatch]) -> set[int]:
+        suppressed_names: set[str] = set()
+        suppressed_prefixes: list[str] = []
+        for match in active_domain_matches:
+            suppressed_names.update(match.domain.suppressed_tool_names)
+            suppressed_prefixes.extend(match.domain.suppressed_prefixes)
+        if not suppressed_names and not suppressed_prefixes:
+            return set()
+
+        indexes: set[int] = set()
+        for card in self._cards:
+            if card.name in suppressed_names or any(card.name.startswith(prefix) for prefix in suppressed_prefixes):
+                indexes.add(card.index)
+        return indexes
+
+    def _build_domain_debug(
+        self,
+        *,
+        active_domain_matches: list[ToolDomainMatch],
+        pinned_indexes: set[int],
+        suppressed_indexes: set[int],
+        selected_indexes: list[int],
+    ) -> dict[str, Any]:
+        selected_set = set(selected_indexes)
+        pinned_available_names = self._tool_names_for_indexes(pinned_indexes)
+        pinned_included_names = self._tool_names_for_indexes(pinned_indexes.intersection(selected_set))
+        omitted_critical_names = [
+            name
+            for name in pinned_available_names
+            if self._tool_index_by_name.get(name) not in selected_set
+        ]
+        suppressed_available_names = self._tool_names_for_indexes(suppressed_indexes)
+        suppressed_selected_names = self._tool_names_for_indexes(suppressed_indexes.intersection(selected_set))
+        selected_names = self._tool_names_for_indexes(selected_set)
+        return {
+            "active_domains": [match.domain.name for match in active_domain_matches],
+            "domain_reasons": {
+                match.domain.name: list(match.reasons)
+                for match in active_domain_matches
+            },
+            "selected_tool_count": len(selected_names),
+            "selected_tools": selected_names[:32],
+            "protected_domains": [
+                match.domain.name
+                for match in active_domain_matches
+                if match.domain.protected
+            ],
+            "pinned_tool_count": len(pinned_available_names),
+            "pinned_included_count": len(pinned_included_names),
+            "pinned_tools": pinned_included_names[:24],
+            "suppressed_tool_count": len(suppressed_available_names),
+            "suppressed_tools": suppressed_available_names[:24],
+            "suppressed_selected_tools": suppressed_selected_names[:12],
+            "omitted_critical_tools": omitted_critical_names[:24],
+        }
+
+    def _tool_names_for_indexes(self, indexes: set[int]) -> list[str]:
+        names = [
+            self._cards[index].name
+            for index in sorted(indexes)
+            if 0 <= index < len(self._cards) and self._cards[index].name
+        ]
+        return names

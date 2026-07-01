@@ -1,0 +1,378 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 482046765323729,
+      "steps": 20,
+      "cfg": 1,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "sgm_uniform",
+      "denoise": 0.6000000000000001,
+      "model": [
+        "32",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": [
+        "28",
+        0
+      ],
+      "clip": [
+        "32",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "32",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "10": {
+    "inputs": {
+      "width": 1456,
+      "height": 816,
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "EmptySD3LatentImage"
+    }
+  },
+  "11": {
+    "inputs": {
+      "guidance": 3.6,
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "FluxGuidance"
+    }
+  },
+  "13": {
+    "inputs": {
+      "unet_name": "fluxmania_V.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "14": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "15": {
+    "inputs": {
+      "clip_name1": "clipLCLIPGFullFP32_zer0intVisionCLIPL.safetensors",
+      "clip_name2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "DualCLIPLoader"
+    }
+  },
+  "16": {
+    "inputs": {
+      "anything": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "easy cleanGpuUsed",
+    "_meta": {
+      "title": "Clean VRAM Used"
+    }
+  },
+  "17": {
+    "inputs": {
+      "image": "darthjulian_laser_designator_pump_recirculator_wagon_high_alpin_dcdd7955-5704-440c-b059-1eef7d778a68.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    },
+    "is_changed": [
+      "16543a5a177a73ff137603b0607cc24b34e1987fc0750ae3573a9b5564fb0662"
+    ]
+  },
+  "18": {
+    "inputs": {
+      "pixels": [
+        "21",
+        0
+      ],
+      "vae": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "20": {
+    "inputs": {
+      "images": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "21": {
+    "inputs": {
+      "blend_factor": 0.6900000000000002,
+      "blend_mode": "normal",
+      "image1": [
+        "17",
+        0
+      ],
+      "image2": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "ImageBlend",
+    "_meta": {
+      "title": "Image Blend"
+    }
+  },
+  "22": {
+    "inputs": {
+      "image": "ComfyUI_00257_.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    },
+    "is_changed": [
+      "b4d65bf0f95e16cafc77f8f20b7bf14c894e88c2ee5d967d6b5928cea2695d3b"
+    ]
+  },
+  "23": {
+    "inputs": {
+      "off_prompt": false
+    },
+    "class_type": "Griptape Tool: DateTime",
+    "_meta": {
+      "title": "Griptape Tool: DateTime"
+    }
+  },
+  "24": {
+    "inputs": {
+      "text": "%KSampler.seed%",
+      "text_b": "",
+      "text_c": "",
+      "text_d": ""
+    },
+    "class_type": "Text String",
+    "_meta": {
+      "title": "Text String"
+    }
+  },
+  "25": {
+    "inputs": {
+      "output_path": "[time(%Y-%m-%d)]",
+      "filename_prefix": "[time(%Y-%m-%d)]",
+      "filename_delimiter": "_",
+      "filename_number_padding": 4,
+      "filename_number_start": "false",
+      "extension": "png",
+      "dpi": 300,
+      "quality": 100,
+      "optimize_image": "true",
+      "lossless_webp": "false",
+      "overwrite_mode": "false",
+      "show_history": "false",
+      "show_history_by_prefix": "true",
+      "embed_workflow": "true",
+      "show_previews": "true",
+      "images": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "Image Save",
+    "_meta": {
+      "title": "Image Save"
+    }
+  },
+  "28": {
+    "inputs": {
+      "STRING": "Automotive X1",
+      "INPUT": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "Griptape Display: Text",
+    "_meta": {
+      "title": "Griptape Display: Text"
+    }
+  },
+  "29": {
+    "inputs": {
+      "STRING": "",
+      "image": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "Griptape Run: Image Description",
+    "_meta": {
+      "title": "Griptape Run: Image Description"
+    }
+  },
+  "30": {
+    "inputs": {
+      "delimiter": ", ",
+      "clean_whitespace": "true",
+      "text_a": [
+        "31",
+        0
+      ],
+      "text_b": [
+        "31",
+        1
+      ],
+      "text_c": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "Text Concatenate",
+    "_meta": {
+      "title": "Text Concatenate"
+    }
+  },
+  "31": {
+    "inputs": {
+      "text": "Automotive X1,",
+      "text_b": "Side view",
+      "text_c": "",
+      "text_d": ""
+    },
+    "class_type": "Text String",
+    "_meta": {
+      "title": "Text String"
+    }
+  },
+  "32": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "Automotive-X1.safetensors",
+        "strength": 1
+      },
+      "lora_2": {
+        "on": true,
+        "lora": "amateurphoto-v6-forcu.safetensors",
+        "strength": 0.4090881347656248
+      },
+      "➕ Add Lora": "",
+      "model": [
+        "13",
+        0
+      ],
+      "clip": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "34": {
+    "inputs": {
+      "STRING": "%KSampler.seed%",
+      "INPUT": [
+        "24",
+        0
+      ]
+    },
+    "class_type": "Griptape Display: Text",
+    "_meta": {
+      "title": "Griptape Display: Text"
+    }
+  },
+  "35": {
+    "inputs": {
+      "filename_prefix": "482046765323729",
+      "images": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

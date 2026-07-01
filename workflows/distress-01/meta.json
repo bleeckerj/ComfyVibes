@@ -1,0 +1,55 @@
+{
+  "id": "distress-01",
+  "name": "distress-01",
+  "description": "Imported from Photarium image d98cd64a-1c49-4feb-5e76-fd51ef644100",
+  "tags": [
+    "found"
+  ],
+  "created_at": "2026-03-09T02:32:01.833971+00:00",
+  "updated_at": "2026-03-09T02:32:01.833995+00:00",
+  "workflow_hash": "0232553634bae0881ad7a2870ef3728032c19226a43b7b0ac5968cf603c3c7a7",
+  "use_cases": [
+    "Run this workflow with parameter overrides via MCP."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "positive_prompt",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "device",
+      "filename_prefix",
+      "image",
+      "megapixels",
+      "node_text_preview",
+      "resolution_steps",
+      "type",
+      "unet_name",
+      "upscale_method",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

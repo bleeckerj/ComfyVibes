@@ -1,0 +1,61 @@
+{
+  "id": "autotrader-02",
+  "name": "autotrader-02",
+  "description": "Imported from artifact",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "sampler",
+    "flux"
+  ],
+  "use_cases": [
+    "Modify an existing image while preserving composition."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "width",
+      "batch_size",
+      "prompt",
+      "sampler_name",
+      "scheduler",
+      "add_lora",
+      "clip_name1",
+      "clip_name2",
+      "device",
+      "filename_prefix",
+      "guidance",
+      "image",
+      "power_lora_loader_header_widget_type",
+      "string",
+      "string_2",
+      "string_3",
+      "string_4",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

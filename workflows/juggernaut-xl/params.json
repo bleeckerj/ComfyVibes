@@ -1,0 +1,163 @@
+{
+  "schema_version": "1",
+  "workflow_id": "juggernaut-xl",
+  "workflow_hash": "1919853dd82276a0ec3776164911052f4ce42fe1825d9130d9d44cf3aa4c48e8",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 23349502367515,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 35,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "float",
+      "default": 6.47,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "height",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "Empty Latent Image.height",
+      "target": {
+        "mode": "direct",
+        "node_id": "5",
+        "input": "height"
+      }
+    },
+    {
+      "name": "width",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "Empty Latent Image.width",
+      "target": {
+        "mode": "direct",
+        "node_id": "5",
+        "input": "width"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "Empty Latent Image.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "5",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "High resolution product photograph of a overland vehicle, sensors communication test equipment pods, in a high alpine meadow, exploration and survey vehicle, post-storm sky dramatic lighting, tall grass, distant mountains, highly detailed, expedition photography, kodachrome, inspired by advertising photography, hopeful, ",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "6",
+        "input": "text"
+      }
+    },
+    {
+      "name": "prompt_2",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "7",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "dpmpp_2m",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "karras",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "ckpt_name",
+      "type": "string",
+      "default": "Juggernaut_X_RunDiffusion.safetensors",
+      "required": false,
+      "description": "Load Checkpoint.ckpt_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "4",
+        "input": "ckpt_name"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "9",
+        "input": "filename_prefix"
+      }
+    }
+  ]
+}

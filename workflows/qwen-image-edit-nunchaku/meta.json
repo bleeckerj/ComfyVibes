@@ -1,0 +1,62 @@
+{
+  "id": "qwen-image-edit-nunchaku",
+  "name": "Qwen Image Edit Nunchaku",
+  "description": "Edit existing images with prompt-guided controls. This is an image to image workflow that uses the Qwen-Image DiT model with Nunchaku for efficient image editing. It supports various editing techniques such as inpainting, outpainting, and upscaling while preserving the original composition and style of the input image.",
+  "tags": [
+    "image-edit",
+    "img2img",
+    "sampler",
+    "qwen",
+    "upscaling",
+    "image to image",
+    "image editing"
+  ],
+  "use_cases": [
+    "Modify an existing image while preserving composition.",
+    "Increase output resolution while retaining style.",
+    "Change specific elements in an image with precise control."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "prompt",
+      "prompt_2",
+      "sampler_name",
+      "scheduler",
+      "clip_name",
+      "cpu_offload",
+      "device",
+      "filename_prefix",
+      "image",
+      "megapixels",
+      "model_name",
+      "num_blocks_on_gpu",
+      "shift",
+      "strength",
+      "type",
+      "upscale_method",
+      "use_pin_memory",
+      "vae_name"
+    ]
+  }
+}

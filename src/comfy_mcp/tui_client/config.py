@@ -153,21 +153,37 @@ EDGAR_EDITORIAL_ROUTING_POLICY_APPENDIX = dedent(
     ## Tool Routing Rules (Explicit)
 
     - When a user asks to create, move, open, edit, or draft an **article/content file** for `nfl-editorial` (keywords include: article, editorial, MDX, frontmatter, issue, section, stub, draft, review, feature), use `editorial_*` tools only.
+    - When a user asks to start, get, edit, validate, or add items/sections to a **Backoffice newsletter draft** (keywords include: newsletter, food-for-thought, dense-discovery, outbox, section schema, issue ids like `w15-y26` or `mw15-y26`), use Backoffice newsletter MCP tools.
+    - For Backoffice stdio, the newsletter tool names are bare names such as `newsletter_get`, `newsletter_get_section_schema`, `newsletter_add_item`, `newsletter_add_digest`, `newsletter_add_signal`, `newsletter_add_section`, and `newsletter_validate`.
+    - If the Backoffice HTTP shim is in use, use the equivalent `backoffice_newsletter_*` tools.
+    - Do not use `workspace_file_write`, `workspace_file_copy`, or generic file edits for newsletter draft changes when the newsletter MCP tools are exposed and callable.
     - Never use `workflows_*` file tools (`workflows_file_write`, `workflows_file_delete`, etc.) for any path under `/Users/julian/Code/nfl-editorial` or `src/content/editorial/...`.
     - Treat `workflows_*` tools as scoped to the workflows repository only (`nfl-comfymcp/workflows`) unless the user explicitly asks to work there.
 
+    ## Required Preflight for Backoffice Newsletter Drafts
+
+    - Start newsletter tasks with `newsletter_get` (or `backoffice_newsletter_get`) when the draft should already exist, or `newsletter_start` (or `backoffice_newsletter_start`) when creating a new draft.
+    - Use `get_section_types` and `newsletter_get_section_schema(section_type)` before `newsletter_add_item` if the section type or item shape is not already known.
+    - Prefer `newsletter_add_digest`, `newsletter_add_signal`, `newsletter_add_section`, and `newsletter_add_item` over manual frontmatter editing.
+
     ## Required Preflight for New Editorial Content Files
 
-    - Before writing a new article file, call `editorial_content_create_stub` with `dryRun: true`.
+    - Before writing a new article file, call `editorial_content_create_stub` with `dryRun: true` and `profile: "practical"` unless the user explicitly asks for full-schema placeholder frontmatter.
     - Verify the returned `path` starts with `src/content/editorial/`.
     - Verify the returned `section`, `hierarchyPath`, and `issueNumber` match the user's intent.
-    - Only then call `editorial_content_create_stub` again with `write: true` and `dryRun: false`.
+    - Only then call `editorial_content_create_stub` again with `write: true`, `dryRun: false`, and the same `profile`.
+    - For final write calls, pass `runChecks: true` and `enforceChecks: true` when the tool supports them.
+    - A dry-run stub/frontmatter preview is not an article draft and must not be presented as completion.
 
     ## Draft Generation Rules
 
     - For draft text generation from a brief, use `editorial_content_draft_from_brief`.
-    - If final placement is not yet decided (for example, still deciding between `nfl-backoffice` and `nfl-editorial`), call `editorial_content_draft_from_brief` with `writeTemp: true`.
-    - Prefer temp draft output over writing directly into an article file when the destination hierarchy/issue is ambiguous.
+    - If the user asked for an article file to be written in `nfl-editorial`, first create the article file, then call `editorial_content_draft_from_brief`, then apply the generated draft into the created path with `editorial_content_apply_edits`.
+    - When the generated draft includes complete MDX with frontmatter, use `editorial_content_apply_edits` with `setRaw`; when it returns body-only prose, use `setBody`.
+    - Use `editorial_content_apply_edits` with `dryRun: true` before the write call when practical, then repeat with `write: true`, `dryRun: false`, `runChecks: true`, and `enforceChecks: true`.
+    - Only use `writeTemp: true` when final placement is not yet decided (for example, still deciding between `nfl-backoffice` and `nfl-editorial`).
+    - A temp draft is not completion when the user asked for a repo article file.
+    - Do not show raw placeholder frontmatter or schema objects as the final answer; summarize the written path, draft status, and any warnings.
 
     ## Cross-Repo Safety Rules
 
@@ -177,10 +193,10 @@ EDGAR_EDITORIAL_ROUTING_POLICY_APPENDIX = dedent(
 
     ## Preferred Editorial Creation Workflow
 
-    1. `editorial_content_create_stub` (`dryRun: true`)
-    2. `editorial_content_create_stub` (`write: true`, `dryRun: false`)
-    3. `editorial_content_draft_from_brief` (`writeTemp: true`)
-    4. (Optional follow-up) open the stub with `editorial_content_open_for_editing` and merge/paste draft text
+    1. `editorial_content_create_stub` (`dryRun: true`, `profile: "practical"`)
+    2. `editorial_content_create_stub` (`write: true`, `dryRun: false`, `profile: "practical"`, `runChecks: true`, `enforceChecks: true`)
+    3. `editorial_content_draft_from_brief`
+    4. `editorial_content_apply_edits` targeting the created path (`setRaw` for full MDX, otherwise `setBody`; dry-run first when practical, then write with checks)
 
     ## Ambiguity Handling
 

@@ -24,6 +24,9 @@ class LocalCommandHandler:
         if command_name in {"/showtoolstate", "/toolstate", "/toolsstate"}:
             app._show_tool_state()
             return True
+        if command_name in {"/toolselection", "/selection", "/lasttools"}:
+            app._show_last_tool_selection()
+            return True
         if command_name in {"/turnoff", "/turnon"}:
             self._handle_tool_toggle(app, user_text, command_name == "/turnon")
             return True
@@ -126,6 +129,10 @@ class LocalCommandHandler:
         app._write_chat("- [cyan]/status[/cyan] show current TUI session status", "- /status show current TUI session status")
         app._write_chat("- [cyan]/reset[/cyan] clear chat/tools and reset LLM context", "- /reset clear chat/tools and reset LLM context")
         app._write_chat("- [cyan]/showtoolstate[/cyan] show which servers are ON/OFF", "- /showtoolstate show which servers are ON/OFF")
+        app._write_chat(
+            "- [cyan]/toolselection[/cyan] show selector diagnostics for the last turn",
+            "- /toolselection show selector diagnostics for the last turn",
+        )
         app._write_chat("- [cyan]/turnon <server>[/cyan] enable a tool server", "- /turnon <server> enable a tool server")
         app._write_chat("- [cyan]/turnoff <server>[/cyan] disable a tool server", "- /turnoff <server> disable a tool server")
         app._write_chat(

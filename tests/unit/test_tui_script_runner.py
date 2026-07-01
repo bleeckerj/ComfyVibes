@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 
 from comfy_mcp.tui_client.config import ChatClientConfig, LLMConfig, ServerConfig
+from comfy_mcp.tui_client.mcp_router import ToolSpec
 from comfy_mcp.tui_client.script_runner import _CheckResult, _doctor
 
 
 class _FakeRouter:
+    def __init__(self, specs=None):  # noqa: ANN001
+        self._specs = specs or []
+
     async def connect(self) -> None:
         return None
 
     def list_tool_specs(self):
-        return []
+        return list(self._specs)
 
     async def close(self) -> None:
         return None
@@ -41,7 +46,7 @@ async def test_doctor_skips_http_probe_for_stdio_server(monkeypatch, tmp_path: P
 
     monkeypatch.setattr(
         "comfy_mcp.tui_client.script_runner.load_config",
-        lambda _path: _cfg(ServerConfig(name="editorial", transport="stdio", command="python", cwd=str(tmp_path))),
+        lambda _path: _cfg(ServerConfig(name="editorial", transport="stdio", command=sys.executable, cwd=str(tmp_path))),
     )
     monkeypatch.setattr("comfy_mcp.tui_client.script_runner._http_probe", _fake_http_probe)
     monkeypatch.setattr("comfy_mcp.tui_client.script_runner._build_router", lambda _servers: _FakeRouter())
@@ -97,3 +102,62 @@ async def test_doctor_validates_stdio_photarium_and_probes_backend(monkeypatch, 
     result = await _doctor("cfg.json")
     assert result == 0
     assert http_calls == ["http://127.0.0.1:3000/api/images?limit=1"]
+
+
+@pytest.mark.asyncio
+async def test_doctor_warns_when_configured_server_contributes_zero_tools(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        "comfy_mcp.tui_client.script_runner.load_config",
+        lambda _path: _cfg(
+            ServerConfig(
+                name="backoffice",
+                transport="stdio",
+                command=sys.executable,
+                cwd=str(tmp_path),
+                tool_prefixes=["backoffice_"],
+            )
+        ),
+    )
+    monkeypatch.setattr("comfy_mcp.tui_client.script_runner._build_router", lambda _servers: _FakeRouter())
+
+    result = await _doctor("cfg.json")
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "[WARN] mcp.tools.backoffice" in output
+    assert "zero tools after prefix filtering" in output
+
+
+@pytest.mark.asyncio
+async def test_doctor_does_not_warn_when_server_contributes_tools(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        "comfy_mcp.tui_client.script_runner.load_config",
+        lambda _path: _cfg(
+            ServerConfig(
+                name="backoffice",
+                transport="stdio",
+                command=sys.executable,
+                cwd=str(tmp_path),
+                tool_prefixes=["newsletter_"],
+            )
+        ),
+    )
+    specs = [ToolSpec(name="newsletter_get", description="", input_schema={}, server="backoffice")]
+    monkeypatch.setattr(
+        "comfy_mcp.tui_client.script_runner._build_router",
+        lambda _servers: _FakeRouter(specs),
+    )
+
+    result = await _doctor("cfg.json")
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "[WARN] mcp.tools.backoffice" not in output

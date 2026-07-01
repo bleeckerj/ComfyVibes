@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from comfy_mcp.tui_client.tool_exposure_diagnostics import build_zero_tool_warnings
+
 
 class StartupDiagnosticsRenderer:
     async def render_connected_servers(self, app: Any) -> None:
@@ -65,6 +67,27 @@ class StartupDiagnosticsRenderer:
                 detail_parts.append(f"dirty={'yes' if dirty else 'no'}")
             plain = f"- {name} ({base_url}) {', '.join(detail_parts)}"
             app._write_chat(f"[dim]{plain}[/dim]", plain)
+
+    async def render_tool_exposure_warnings(self, app: Any) -> None:
+        tool_specs = app._router.list_tool_specs()
+        active_config_builder = getattr(app, "_build_active_config", None)
+        if callable(active_config_builder):
+            servers = active_config_builder().servers
+        else:
+            servers = app._all_servers
+        warnings = build_zero_tool_warnings(servers, tool_specs)
+        if not warnings:
+            return
+        app._write_chat("[bold yellow]Startup warnings:[/bold yellow]", "Startup warnings:")
+        app._write_tools("[bold yellow]Startup warnings:[/bold yellow]", "Startup warnings:")
+        for warning in warnings:
+            plain = f"Tool exposure warning: {warning.message}"
+            app._write_chat(f"[yellow]{plain}[/yellow]", plain)
+            app._write_tools(f"[yellow]{plain}[/yellow]", plain)
+        app._write_chat(
+            "[yellow]Startup warnings are also persisted in the Tools pane and session log.[/yellow]",
+            "Startup warnings are also persisted in the Tools pane and session log.",
+        )
 
     async def render_comfy_server_info(self, app: Any) -> None:
         if "comfy_server_info" not in app._available_tool_names:

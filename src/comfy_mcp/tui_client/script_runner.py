@@ -17,6 +17,7 @@ from comfy_mcp.tui_client.config import ServerConfig, load_config
 from comfy_mcp.tui_client.http_router import HTTPToolRouter
 from comfy_mcp.tui_client.hybrid_router import HybridToolRouter
 from comfy_mcp.tui_client.mcp_router import MCPToolRouter
+from comfy_mcp.tui_client.tool_exposure_diagnostics import build_zero_tool_warnings
 from comfy_mcp.tui_client.transport_plan import build_transport_plan
 
 
@@ -81,6 +82,7 @@ class _CheckResult:
     ok: bool
     name: str
     detail: str
+    severity: str = "ok"
 
 
 async def _http_probe(url: str, timeout_s: float = 2.0) -> _CheckResult:
@@ -184,6 +186,15 @@ async def _doctor(config_path: str) -> int:
         await router.connect()
         tool_specs = router.list_tool_specs()
         checks.append(_CheckResult(ok=True, name="mcp.connect", detail=f"{len(tool_specs)} tools available"))
+        for warning in build_zero_tool_warnings(cfg.servers, tool_specs):
+            checks.append(
+                _CheckResult(
+                    ok=True,
+                    name=f"mcp.tools.{warning.server_name}",
+                    detail=warning.message,
+                    severity="warn",
+                )
+            )
 
         tool_names = {spec.name for spec in tool_specs}
         if "comfy_queue_get" in tool_names:
@@ -236,7 +247,7 @@ async def _doctor(config_path: str) -> int:
         await router.close()
 
     for item in checks:
-        state = "OK" if item.ok else "FAIL"
+        state = "WARN" if item.severity == "warn" else ("OK" if item.ok else "FAIL")
         print(f"[{state}] {item.name}: {item.detail}")
 
     if any(not item.ok for item in checks):

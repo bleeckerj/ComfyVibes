@@ -1,0 +1,271 @@
+{
+  "schema_version": "1",
+  "workflow_id": "autotrader-03",
+  "workflow_hash": "c2de9533a78cb3c51eb7ddf4b96b9b61c7bd06fba8d88a2ec3b2263e6b2a3115",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 330210380767212,
+      "required": false,
+      "description": "KSampler.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "steps",
+      "type": "int",
+      "default": 30,
+      "required": false,
+      "description": "KSampler.steps",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "steps"
+      }
+    },
+    {
+      "name": "cfg",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.cfg",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "cfg"
+      }
+    },
+    {
+      "name": "denoise",
+      "type": "float",
+      "default": 1.0,
+      "required": false,
+      "description": "KSampler.denoise",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "denoise"
+      }
+    },
+    {
+      "name": "height",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.height",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "height"
+      }
+    },
+    {
+      "name": "width",
+      "type": "int",
+      "default": 1024,
+      "required": false,
+      "description": "EmptySD3LatentImage.width",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "width"
+      }
+    },
+    {
+      "name": "batch_size",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "EmptySD3LatentImage.batch_size",
+      "target": {
+        "mode": "direct",
+        "node_id": "10",
+        "input": "batch_size"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "A rugged, military-style all-terrain vehicle (ATV) open cab like a sleek low-profile purpose-build and equipped aerodynamic car with advanced surveillance and communication equipment. The M-ATV has large, off-road tires and a robust frame, suitable for rough terrain. Mounted on top is a complicated and interconnected and sophisticated array of electronic devices, including targeting pods with rotating cameras behing optical glass, laser designators, , high-gain whip antennas, protrusions that look like antennas, and possibly radar or communication systems. The headlights are on and bright LED style illumination. This setup suggests the vehicle is designed for reconnaissance, surveillance, or remote monitoring in challenging environments. The background features a very Nordic sea shore landscape, indicating the vehicle is deployed in a very remote Norwegian or Swedish seaside durng the fall or winter. It is a rocky shore with ocean tide coming into the gray wet beach. There is a simple white Apple logo on the front radiator grill FX30 Fm2 24mm wide angle lens shallow depth of field tilt-shift visual style. Tiny drops of water on the lens.",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "6",
+        "input": "text"
+      }
+    },
+    {
+      "name": "prompt_2",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "7",
+        "input": "text"
+      }
+    },
+    {
+      "name": "prompt_3",
+      "type": "string",
+      "default": "Text, watermarks, blurry logos",
+      "required": false,
+      "description": "CLIP Text Encode (Prompt).text",
+      "target": {
+        "mode": "direct",
+        "node_id": "19",
+        "input": "text"
+      }
+    },
+    {
+      "name": "sampler_name",
+      "type": "string",
+      "default": "dpmpp_2m",
+      "required": false,
+      "description": "KSampler.sampler_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "sampler_name"
+      }
+    },
+    {
+      "name": "scheduler",
+      "type": "string",
+      "default": "sgm_uniform",
+      "required": false,
+      "description": "KSampler.scheduler",
+      "target": {
+        "mode": "direct",
+        "node_id": "3",
+        "input": "scheduler"
+      }
+    },
+    {
+      "name": "clip_name1",
+      "type": "string",
+      "default": "clipLCLIPGFullFP32_zer0intVisionCLIPL.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name1",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "clip_name1"
+      }
+    },
+    {
+      "name": "clip_name2",
+      "type": "string",
+      "default": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "required": false,
+      "description": "DualCLIPLoader.clip_name2",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "clip_name2"
+      }
+    },
+    {
+      "name": "device",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "DualCLIPLoader.device",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "device"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "9",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "guidance",
+      "type": "float",
+      "default": 3.5,
+      "required": false,
+      "description": "FluxGuidance.guidance",
+      "target": {
+        "mode": "direct",
+        "node_id": "11",
+        "input": "guidance"
+      }
+    },
+    {
+      "name": "type",
+      "type": "string",
+      "default": "flux",
+      "required": false,
+      "description": "DualCLIPLoader.type",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "type"
+      }
+    },
+    {
+      "name": "unet_name",
+      "type": "string",
+      "default": "fluxmania_V.safetensors",
+      "required": false,
+      "description": "Load Diffusion Model.unet_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "13",
+        "input": "unet_name"
+      }
+    },
+    {
+      "name": "vae_name",
+      "type": "string",
+      "default": "ae.safetensors",
+      "required": false,
+      "description": "Load VAE.vae_name",
+      "target": {
+        "mode": "direct",
+        "node_id": "14",
+        "input": "vae_name"
+      }
+    },
+    {
+      "name": "video_preview",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "description": "FluxGuidance.video-preview",
+      "target": {
+        "mode": "direct",
+        "node_id": "11",
+        "input": "video-preview"
+      }
+    },
+    {
+      "name": "weight_dtype",
+      "type": "string",
+      "default": "default",
+      "required": false,
+      "description": "Load Diffusion Model.weight_dtype",
+      "target": {
+        "mode": "direct",
+        "node_id": "13",
+        "input": "weight_dtype"
+      }
+    }
+  ]
+}

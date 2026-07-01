@@ -1,0 +1,59 @@
+{
+  "id": "replay_29822997",
+  "name": "replay_29822997",
+  "description": "Imported from Photarium image 29822997-99e1-4cc8-a9b7-8e96c4e24d00",
+  "tags": [
+    "found"
+  ],
+  "created_at": "2026-03-07T19:54:18.027326+00:00",
+  "updated_at": "2026-03-07T19:54:18.027344+00:00",
+  "workflow_hash": "3733355aea41652ad81734c38cb20c80b7767989c8ac3a763514a3e6988c94d9",
+  "use_cases": [
+    "Run this workflow with parameter overrides via MCP."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "batch_size",
+      "prompt",
+      "sampler_name",
+      "scheduler",
+      "aspect_ratio",
+      "clip_name1",
+      "clip_name2",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "device",
+      "divisible_by",
+      "filename_prefix",
+      "guidance",
+      "image",
+      "image_2",
+      "megapixel",
+      "type",
+      "unet_name",
+      "vae_name",
+      "weight_dtype"
+    ]
+  }
+}

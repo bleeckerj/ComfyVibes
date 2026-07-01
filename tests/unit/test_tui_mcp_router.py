@@ -166,6 +166,55 @@ async def test_router_connect_and_call(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stdio_backoffice_prefix_filter_keeps_newsletter_tools(monkeypatch):
+    tools = [
+        {"name": "newsletter_get", "description": "Load newsletter", "inputSchema": {"type": "object"}},
+        {
+            "name": "newsletter_add_item",
+            "description": "Add newsletter item",
+            "inputSchema": {"type": "object"},
+        },
+        {
+            "name": "newsletter_get_section_schema",
+            "description": "Get section schema",
+            "inputSchema": {"type": "object"},
+        },
+        {"name": "get_section_types", "description": "List section types", "inputSchema": {"type": "object"}},
+        {"name": "search_digests", "description": "Bare digest search", "inputSchema": {"type": "object"}},
+    ]
+    _install_fake_mcp_modules(monkeypatch, tools)
+
+    router = MCPToolRouter(
+        [
+            ServerConfig(
+                name="backoffice",
+                command="python",
+                args=["mcp/mcp_backoffice_server.py"],
+                tool_prefixes=[
+                    "newsletter_",
+                    "suggest_newsletter_",
+                    "format_",
+                    "get_section_types",
+                    "create_newsletter_",
+                    "backoffice_",
+                ],
+            )
+        ]
+    )
+
+    await router.connect()
+    try:
+        tool_names = {spec.name for spec in router.list_tool_specs()}
+        assert "newsletter_get" in tool_names
+        assert "newsletter_add_item" in tool_names
+        assert "newsletter_get_section_schema" in tool_names
+        assert "get_section_types" in tool_names
+        assert "search_digests" not in tool_names
+    finally:
+        await router.close()
+
+
+@pytest.mark.asyncio
 async def test_router_unknown_tool(monkeypatch):
     _install_fake_mcp_modules(monkeypatch, [])
     router = MCPToolRouter([ServerConfig(name="comfy", command="python")])

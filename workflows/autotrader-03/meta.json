@@ -1,0 +1,55 @@
+{
+  "id": "autotrader-03",
+  "name": "Autotrader 03",
+  "description": "Generate images from text prompts.",
+  "tags": [
+    "text-to-image",
+    "sampler",
+    "flux"
+  ],
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "steps",
+      "cfg",
+      "denoise",
+      "height",
+      "width",
+      "batch_size",
+      "prompt",
+      "prompt_2",
+      "prompt_3",
+      "sampler_name",
+      "scheduler",
+      "clip_name1",
+      "clip_name2",
+      "device",
+      "filename_prefix",
+      "guidance",
+      "type",
+      "unet_name",
+      "vae_name",
+      "video_preview",
+      "weight_dtype"
+    ]
+  }
+}

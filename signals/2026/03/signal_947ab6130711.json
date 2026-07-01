@@ -1,0 +1,53 @@
+{
+  "signal_id": "947ab6130711",
+  "digest_id": "",
+  "digest_path": "",
+  "extracted_at": "2026-03-02T22:30:40.232928",
+  "headline": "the ascendancy of \u201cfake news\u201d and thr bombast of Truth Social hasn\u2019t unmoored the kind of truth we\u2019ve appre...",
+  "hook": "the ascendancy of \u201cfake news\u201d and thr bombast of Truth Social hasn\u2019t unmoored the kind of truth we\u2019ve appreciated since \u2026; recent studies and anecdotal evidence indicates that media literacy and awareness has increased...",
+  "source_url": "",
+  "source_date": "2026-03-02",
+  "editorial_potential": 0.7,
+  "artifact_potential": "medium",
+  "novelty_note": "Captured from direct editorial free-text observation.",
+  "story_seeds": [
+    "What second-order effects appear if this observed pattern accelerates?"
+  ],
+  "headline_seeds": [
+    "the ascendancy of \u201cfake news\u201d and thr bombast of Truth Social hasn\u2019t unmoored the kind of truth we\u2019ve appre..."
+  ],
+  "suggested_sections": [
+    "features"
+  ],
+  "diegetic_angles": [],
+  "artifact_ideas": [],
+  "collision_keywords": [
+    "ascendancy",
+    "fake",
+    "news",
+    "thr",
+    "bombast",
+    "truth",
+    "social",
+    "hasn",
+    "unmoored",
+    "kind",
+    "appre",
+    "appreciated"
+  ],
+  "themes": [
+    "ad-hoc-observation"
+  ],
+  "digest_summary": "the ascendancy of \u201cfake news\u201d and thr bombast of Truth Social hasn\u2019t unmoored the kind of truth we\u2019ve appreciated since \u2026; recent studies and anecdotal evidence indicates that media literacy and awareness has increased to where fake news entertains like a television show or novel more than it sways knowledge or opinion or shapes beliefs on the ground",
+  "ad_hoc_note": "the ascendancy of \u201cfake news\u201d and thr bombast of Truth Social hasn\u2019t unmoored the kind of truth we\u2019ve appreciated since \u2026; recent studies and anecdotal evidence indicates that media literacy and awareness has increased to where fake news entertains like a television show or novel more than it sways knowledge or opinion or shapes beliefs on the ground",
+  "source": {
+    "url": "",
+    "title": "the ascendancy of \u201cfake news\u201d and thr bombast of Truth Social hasn\u2019t unmoored the kind of truth we\u2019ve appre...",
+    "author": "manual-entry",
+    "publication": "ad-hoc",
+    "date": "2026-03-02",
+    "type": "ad_hoc"
+  },
+  "status": "new",
+  "notes": ""
+}
