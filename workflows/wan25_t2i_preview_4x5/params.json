@@ -1,0 +1,151 @@
+{
+  "schema_version": "1",
+  "workflow_id": "wan25_t2i_preview_4x5",
+  "workflow_hash": "9221a77c5fa7e11eb1aca2c6418ef93ba3421cb97bf3a13f5a9e6a04204c733d",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 695849599,
+      "required": false,
+      "description": "Wan Text to Image.seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "12",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "4:5 portrait photorealistic editorial object photograph of a cream-colored vintage rotary telephone handset and dial assembly, one object only, on a simple plain robin's egg blue background. Receiver resting slightly off the cradle beside the circular dial, coiled cord, finger holes, worn cream plastic, complete recognizable phone object, centered calm catalog composition, camera directly overhead or slightly above, soft even studio lighting, minimal natural shadow, crisp focus. No extra props, hands, people, clutter, watermark, captions, or unrelated text.",
+      "required": false,
+      "description": "Wan Text to Image.prompt",
+      "target": {
+        "mode": "direct",
+        "node_id": "12",
+        "input": "prompt"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "4:5 (Artistic Frame)",
+      "required": false,
+      "description": "Flux Resolution Calc.aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "aspect_ratio"
+      }
+    },
+    {
+      "name": "custom_aspect_ratio",
+      "type": "string",
+      "default": "1:1",
+      "required": false,
+      "description": "Flux Resolution Calc.custom_aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "custom_aspect_ratio"
+      }
+    },
+    {
+      "name": "custom_ratio",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "Flux Resolution Calc.custom_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "custom_ratio"
+      }
+    },
+    {
+      "name": "divisible_by",
+      "type": "string",
+      "default": "64",
+      "required": false,
+      "description": "Flux Resolution Calc.divisible_by",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "divisible_by"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "Wan2.5-t2i-preview",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "13",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "megapixel",
+      "type": "string",
+      "default": "1.0",
+      "required": false,
+      "description": "Flux Resolution Calc.megapixel",
+      "target": {
+        "mode": "direct",
+        "node_id": "15",
+        "input": "megapixel"
+      }
+    },
+    {
+      "name": "model",
+      "type": "string",
+      "default": "wan2.5-t2i-preview",
+      "required": false,
+      "description": "Wan Text to Image.model",
+      "target": {
+        "mode": "direct",
+        "node_id": "12",
+        "input": "model"
+      }
+    },
+    {
+      "name": "negative_prompt",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "description": "Wan Text to Image.negative_prompt",
+      "target": {
+        "mode": "direct",
+        "node_id": "12",
+        "input": "negative_prompt"
+      }
+    },
+    {
+      "name": "prompt_extend",
+      "type": "bool",
+      "default": true,
+      "required": false,
+      "description": "Wan Text to Image.prompt_extend",
+      "target": {
+        "mode": "direct",
+        "node_id": "12",
+        "input": "prompt_extend"
+      }
+    },
+    {
+      "name": "watermark",
+      "type": "bool",
+      "default": false,
+      "required": false,
+      "description": "Wan Text to Image.watermark",
+      "target": {
+        "mode": "direct",
+        "node_id": "12",
+        "input": "watermark"
+      }
+    }
+  ]
+}

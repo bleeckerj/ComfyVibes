@@ -1,0 +1,49 @@
+{
+  "id": "wan25_t2i_preview_4x5",
+  "name": "Wan 2.5 T2I Preview 4:5",
+  "description": "Imported from artifact",
+  "tags": [
+    "text-to-image",
+    "wan",
+    "wan2.5",
+    "4:5",
+    "imported",
+    "small-stuff"
+  ],
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "prompt",
+      "negative_prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "prompt",
+      "aspect_ratio",
+      "custom_aspect_ratio",
+      "custom_ratio",
+      "divisible_by",
+      "filename_prefix",
+      "megapixel",
+      "model",
+      "negative_prompt",
+      "prompt_extend",
+      "watermark"
+    ]
+  }
+}

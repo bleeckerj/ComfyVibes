@@ -1,0 +1,50 @@
+{
+  "12": {
+    "inputs": {
+      "model": "wan2.5-t2i-preview",
+      "prompt": "4:5 portrait photorealistic editorial object photograph of a cream-colored vintage rotary telephone handset and dial assembly, one object only, on a simple plain robin's egg blue background. Receiver resting slightly off the cradle beside the circular dial, coiled cord, finger holes, worn cream plastic, complete recognizable phone object, centered calm catalog composition, camera directly overhead or slightly above, soft even studio lighting, minimal natural shadow, crisp focus. No extra props, hands, people, clutter, watermark, captions, or unrelated text.",
+      "negative_prompt": "",
+      "width": [
+        "15",
+        0
+      ],
+      "height": [
+        "15",
+        1
+      ],
+      "seed": 695849599,
+      "prompt_extend": true,
+      "watermark": false
+    },
+    "class_type": "WanTextToImageApi",
+    "_meta": {
+      "title": "Wan Text to Image"
+    }
+  },
+  "13": {
+    "inputs": {
+      "filename_prefix": "Wan2.5-t2i-preview",
+      "images": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "15": {
+    "inputs": {
+      "megapixel": "1.0",
+      "aspect_ratio": "4:5 (Artistic Frame)",
+      "divisible_by": "64",
+      "custom_ratio": false,
+      "custom_aspect_ratio": "1:1"
+    },
+    "class_type": "FluxResolutionNode",
+    "_meta": {
+      "title": "Flux Resolution Calc"
+    }
+  }
+}
