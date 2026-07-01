@@ -96,6 +96,7 @@ WORKSPACE_HTTP_PORT=8791 \
 Optional related vars:
 
 - `COMFY_MCP_HTTP_BIND_HOST` (used by Comfy MCP helper)
+- `COMFY_MCP_COMFY_ORG_AUTH_TOKEN_FILE` / `COMFY_MCP_COMFY_ORG_API_KEY_FILE` (server-side Comfy Org auth for workflow API nodes)
 - `PHOTARIUM_HTTP_HOST` (used by Photarium MCP helper)
 - `PHOTARIUM_ROOT` (path to `cloud-flare-image-handler`)
 - `EDITORIAL_ROOT` (path to `nfl-editorial`)

@@ -124,6 +124,28 @@ Defaults:
 
 You can persist settings in `.env` (see [.env.example](.env.example)).
 
+#### Comfy Org auth for API nodes
+
+Some ComfyUI nodes request Comfy Org credentials through hidden inputs. ComfyMCP can supply those values during `workflows_run`, `workflows_run_from_source`, and `workflows_run_aspect_ratio_adjustment` without putting the secret in tool arguments or workflow JSON.
+
+Configure one or both credentials in `.env`:
+
+```dotenv
+COMFY_MCP_COMFY_ORG_AUTH_TOKEN_FILE=~/.config/comfy-mcp/comfy-org-auth-token
+COMFY_MCP_COMFY_ORG_API_KEY_FILE=~/.config/comfy-mcp/comfy-org-api-key
+```
+
+Direct env values also work:
+
+```dotenv
+COMFY_MCP_COMFY_ORG_AUTH_TOKEN=your-comfy-org-auth-token
+COMFY_MCP_COMFY_ORG_API_KEY=your-comfy-org-api-key
+```
+
+File values are preferred for local development because they keep credentials out of shell history and copied config snippets. When both a direct value and file path are set for the same credential, the direct value wins.
+
+At prompt submission time, ComfyMCP sends the configured values to ComfyUI as `extra_data.auth_token_comfy_org` and `extra_data.api_key_comfy_org`. Current ComfyUI treats those keys as sensitive hidden extra data for nodes that declare `AUTH_TOKEN_COMFY_ORG` or `API_KEY_COMFY_ORG`.
+
 If you've installed the package (for example, `pip install -e .`), you can also use:
 
 ```bash
@@ -419,16 +441,16 @@ ComfyVibes exposes a single MCP server — **ComfyMCP** — for ComfyUI interact
 
 | Tool | Description |
 |------|-------------|
-| `workflows_run` | Run a workflow with parameter overrides via ComfyUI. Supports `force` to bypass caching and `client_id` for tracking. |
+| `workflows_run` | Run a workflow with parameter overrides via ComfyUI. Supports `force` to bypass caching, `client_id` for tracking, and configured Comfy Org hidden auth for API nodes. |
 | `workflows_wait` | Wait for a prompt to appear in ComfyUI history. Configurable `timeout_s` and `poll_ms`. |
 | `workflows_extract_from_artifact` | Extract an embedded workflow from a ComfyUI-generated image or video artifact (PNG, WebP, MP4, etc.). |
 | `workflows_extract_from_photarium` | Extract a workflow for a Photarium image id, falling back to downloading the original artifact when derived JPEG variants lack embedded metadata. |
 | `workflows_import_from_artifact` | Extract a workflow from an artifact and save it directly to the workflow store with name, tags, and metadata. |
 | `workflows_import_from_photarium` | Pull a Photarium image workflow and save it to the workflow corpus (falls back to Photarium extras or original artifact download when needed). |
-| `workflows_run_from_source` | Resolve a Photarium id, URL, or local file path, recover the embedded workflow or lineage cache, and run it. Returns `needs_input` with a resumable token when required image bindings are missing. |
+| `workflows_run_from_source` | Resolve a Photarium id, URL, or local file path, recover the embedded workflow or lineage cache, and run it. Returns `needs_input` with a resumable token when required image bindings are missing. Uses the same configured Comfy Org hidden auth as `workflows_run`. |
 | `workflows_lineage_register_results` | Attach uploaded Photarium result image ids to a runtime lineage record so later requests can reuse the cached packaged workflow by result id. |
 | `workflows_lineage_get` | Inspect one runtime lineage record by `lineage_run_id` or by resolving a source/result image id through the lineage indexes. |
-| `workflows_run_aspect_ratio_adjustment` | Upload an image, set aspect ratio, and run the aspect ratio adjustment workflow. Supports positive/negative prompts, seed, and output naming. |
+| `workflows_run_aspect_ratio_adjustment` | Upload an image, set aspect ratio, and run the aspect ratio adjustment workflow. Supports positive/negative prompts, seed, output naming, and configured Comfy Org hidden auth. |
 
 ---
 
