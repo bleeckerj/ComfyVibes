@@ -315,28 +315,49 @@ async def _call_tool(router: Any, tool: str, raw_args: str) -> int:
     return 0
 
 
-async def _run_steps(router: Any, steps_file: str) -> int:
+def _load_steps_payload(steps_file: str) -> tuple[list[dict[str, Any]] | None, str | None]:
     try:
         steps_payload = json.loads(Path(steps_file).read_text(encoding="utf-8"))
         if not isinstance(steps_payload, list):
             raise ValueError("Steps file must be a JSON array.")
     except Exception as exc:
-        print(json.dumps({"error": f"Invalid --steps-file JSON: {exc}"}, indent=2))
-        return 2
+        return None, f"Invalid --steps-file JSON: {exc}"
 
-    results: list[dict[str, Any]] = []
     for index, step in enumerate(steps_payload):
         if not isinstance(step, dict):
-            print(json.dumps({"error": f"Step {index} is not an object."}, indent=2))
-            return 2
+            return None, f"Step {index} is not an object."
         tool = step.get("tool")
         args = step.get("args", {})
         if not isinstance(tool, str):
-            print(json.dumps({"error": f"Step {index} missing string field 'tool'."}, indent=2))
-            return 2
+            return None, f"Step {index} missing string field 'tool'."
         if not isinstance(args, dict):
-            print(json.dumps({"error": f"Step {index} field 'args' must be an object."}, indent=2))
-            return 2
+            return None, f"Step {index} field 'args' must be an object."
+
+    return steps_payload, None
+
+
+def _servers_for_tools(
+    servers: list[ServerConfig],
+    tool_names: set[str],
+) -> list[ServerConfig]:
+    """Return the configured servers needed for a deterministic tool batch."""
+    selected = [
+        server
+        for server in servers
+        if any(
+            tool_name.startswith(prefix)
+            for tool_name in tool_names
+            for prefix in server.tool_prefixes
+        )
+    ]
+    return selected or servers
+
+
+async def _run_steps(router: Any, steps_payload: list[dict[str, Any]]) -> int:
+    results: list[dict[str, Any]] = []
+    for index, step in enumerate(steps_payload):
+        tool = step["tool"]
+        args = step.get("args", {})
 
         try:
             result = await router.call_tool(tool, args)
@@ -355,6 +376,14 @@ async def _amain(args: argparse.Namespace) -> int:
         return await _doctor(args.config)
 
     cfg = load_config(args.config)
+    steps_payload: list[dict[str, Any]] | None = None
+    if args.command == "run-steps":
+        steps_payload, error = _load_steps_payload(args.steps_file)
+        if error:
+            print(json.dumps({"error": error}, indent=2))
+            return 2
+        cfg.servers = _servers_for_tools(cfg.servers, {step["tool"] for step in steps_payload})
+
     router = _build_router(cfg.servers)
     await router.connect()
     try:
@@ -363,7 +392,8 @@ async def _amain(args: argparse.Namespace) -> int:
         if args.command == "call":
             return await _call_tool(router, args.tool, args.args)
         if args.command == "run-steps":
-            return await _run_steps(router, args.steps_file)
+            assert steps_payload is not None
+            return await _run_steps(router, steps_payload)
         print(json.dumps({"error": f"Unknown command: {args.command}"}, indent=2))
         return 2
     finally:
