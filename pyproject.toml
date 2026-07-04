@@ -13,7 +13,6 @@ dependencies = [
   "comfyui-workflow-tools @ git+https://github.com/bleeckerj/comfyui-workflow-extractor.git",
   "pydantic>=2.7.0",
   "pydantic-settings>=2.2.1",
-  "textual>=0.69.0",
   "openai>=1.40.0",
   "fastapi>=0.110.0",
   "uvicorn>=0.29.0",
@@ -29,8 +28,6 @@ dev = [
 [project.scripts]
 comfy-mcp = "comfy_mcp.mcp_server.cli:main"
 comfy-vibes = "comfy_mcp.mcp_server.cli:main"
-comfy-mcp-chat = "comfy_mcp.tui_client.app:main"
-comfy-mcp-run = "comfy_mcp.tui_client.script_runner:main"
 comfy-mcp-http = "comfy_mcp.mcp_server.http_server:main"
 
 [tool.pytest.ini_options]

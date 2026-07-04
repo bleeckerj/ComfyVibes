@@ -5,7 +5,7 @@ Install workflows into the ComfyMCP workflow store from either:
 - An API JSON file (`prompt` format, node-id keyed), or
 - A ComfyUI-generated artifact (PNG/WebP/MP4/etc. with embedded workflow metadata).
 
-By default, `./run_mcp_tools.sh` writes into this repo's workflow root:
+By default, `/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh` writes into this repo's workflow root:
 
 - `/Users/julian/Code/nfl-comfymcp/workflows/<workflow_id>/workflow.json`
 - `/Users/julian/Code/nfl-comfymcp/workflows/<workflow_id>/meta.json`
@@ -39,7 +39,7 @@ ARGS="$(jq -cn \
   }'
 )"
 
-./run_mcp_tools.sh call --tool workflows_save --args "$ARGS"
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call --tool workflows_save --args "$ARGS"
 ```
 
 Notes:
@@ -52,7 +52,7 @@ Notes:
 Use `workflows_import_from_artifact` (extract + save + package in one step).
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_import_from_artifact \
   --args '{
     "path":"/absolute/path/to/ComfyUI_output.png",
@@ -65,7 +65,7 @@ Use `workflows_import_from_artifact` (extract + save + package in one step).
 ## Optional: Extract only (no install)
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_extract_from_artifact \
   --args '{"path":"/absolute/path/to/ComfyUI_output.png"}'
 ```
@@ -75,15 +75,15 @@ If your goal is installation, `workflows_import_from_artifact` is simpler.
 ## Verify install
 
 ```bash
-./run_mcp_tools.sh call --tool workflows_get --args '{"workflow_id":"my_imported_workflow"}'
-./run_mcp_tools.sh call --tool workflows_params_get --args '{"workflow_id":"my_imported_workflow"}'
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call --tool workflows_get --args '{"workflow_id":"my_imported_workflow"}'
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call --tool workflows_params_get --args '{"workflow_id":"my_imported_workflow"}'
 ls -la "/Users/julian/Code/nfl-comfymcp/workflows/my_imported_workflow"
 ```
 
 ## Optional: refine metadata later
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_package \
   --args '{
     "workflow_id":"my_imported_workflow",
@@ -106,7 +106,7 @@ API_JSON="/absolute/path/to/workflow_api.json"
 mkdir -p "/Users/julian/Code/nfl-comfymcp/workflows/$WORKFLOW_ID"
 cp "$API_JSON" "/Users/julian/Code/nfl-comfymcp/workflows/$WORKFLOW_ID/workflow.json"
 
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_package \
   --args "{
     \"workflow_id\":\"$WORKFLOW_ID\",

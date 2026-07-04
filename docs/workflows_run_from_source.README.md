@@ -33,7 +33,7 @@ Do not use it when you already know the `workflow_id` you want and just need a n
 ### 1. Run from a Photarium image id
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_run_from_source \
   --args '{
     "source":"75e92a7e-2838-45a7-6f2c-32a5fde6c300",
@@ -46,7 +46,7 @@ Do not use it when you already know the `workflow_id` you want and just need a n
 ### 2. Run from a local file path
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_run_from_source \
   --args '{
     "source":"/tmp/ComfyUI_01065.png",
@@ -58,7 +58,7 @@ Do not use it when you already know the `workflow_id` you want and just need a n
 ### 3. Run from a URL
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_run_from_source \
   --args '{
     "source":"https://example.com/comfy-output.png",
@@ -71,7 +71,7 @@ Do not use it when you already know the `workflow_id` you want and just need a n
 First call:
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_run_from_source \
   --args '{
     "source":"/tmp/stitched-result.png",
@@ -95,7 +95,7 @@ If the workflow is classified as `image_stitch`, the tool may return:
 Resume with the required bindings:
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_run_from_source \
   --args '{
     "resume_token":"run_abcd1234ef56",
@@ -111,7 +111,7 @@ Resume with the required bindings:
 If EDGAR or another client uploads the workflow outputs to Photarium, register those result ids:
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_lineage_register_results \
   --args '{
     "lineage_run_id":"run_abcd1234ef56",
@@ -124,7 +124,7 @@ If EDGAR or another client uploads the workflow outputs to Photarium, register t
 After that, the result image id itself becomes reusable as a source:
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_run_from_source \
   --args '{
     "source":"b287f5ef-2901-4e27-f6b4-b483fc4a7e00",
@@ -136,11 +136,11 @@ After that, the result image id itself becomes reusable as a source:
 ### 6. Inspect lineage by run id or image id
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_lineage_get \
   --args '{"lineage_run_id":"run_abcd1234ef56"}'
 
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_lineage_get \
   --args '{"image_id":"b287f5ef-2901-4e27-f6b4-b483fc4a7e00"}'
 ```

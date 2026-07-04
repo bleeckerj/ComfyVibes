@@ -173,130 +173,27 @@ python scripts/http_proxy_client.py --server comfy --tool comfy_queue_get
 python scripts/http_proxy_client.py --server photarium --tool photarium_list --args '{"limit": 1}'
 ```
 
-### TUI Chat Client
+### MCP TUI / Deterministic Runner
 
-This is very much a work-in-progress, but you can have conversations with your ComfyUI server right from the terminal. It’s a great (or frustrating) way to explore the tool surface, test out prompts, and see how LLMs can orchestrate workflows in real time.
+The terminal operator UI and deterministic MCP runner now live in the neutral repo at `/Users/julian/Code/nfl-mcp-tui`. This repository keeps the ComfyMCP server, workflow store, workspace server, and MCP tools.
+
+From the extracted client repo:
+
+```bash
+cd /Users/julian/Code/nfl-mcp-tui
+nfl-mcp-tui --config mcp_chat_config.json
+nfl-mcp-run --config mcp_chat_config.json doctor
+```
+
+Launcher equivalents in that repo:
 
 ```bash
 ./run_mcp_chat.sh
-```
-
-`./run_mcp_chat.sh` runs a doctor preflight first and exits with clear endpoint/service errors if anything is down.
-
-If you want direct command form instead of the launcher:
-
-```bash
-comfy-mcp-chat --config mcp_chat_config.json
-```
-
-OpenAI key can be set in either:
-
-- `mcp_chat_config.json` at `llm.api_key`
-- environment var named in `llm.api_key_env`
-
-Launchers:
-
-- `./run_mcp_chat.sh`: copy-friendly mode (mouse capture off; terminal selection works)
-- `./run_mcp_chat_mouse.sh`: pane wheel-scroll mode (mouse capture on)
-
-Reliability mode:
-
-- Set `"strict_tool_facts": true` in `mcp_chat_config.json` to force tool-grounded output.
-- In this mode, when tools are called, the chat shows exact tool JSON and skips model interpretation.
-
-Keybindings:
-
-- `F1`: Set active pane to chat
-- `F2`: Set active pane to tools
-- `Alt+Up/Down`: Scroll active pane by one line
-- `Alt+PageUp/PageDown`: Scroll active pane by one page
-- `Alt+Home/End`: Jump active pane to top/bottom
-- `F6`: Copy chat pane content to clipboard
-- `F7`: Copy tool pane content to clipboard
-- `F8`: Copy both chat and tool content to clipboard
-- `F9`: Export full transcript to `mcp_chat_transcript_YYYYMMDD_HHMMSS.txt`
-- `Ctrl+Q`, `Ctrl+C`, `Esc`, or `F10`: Quit
-
-### Deterministic Tool Runner (No LLM)
-
-Use this for fast, explicit tool calls with zero model reasoning.
-
-```bash
+./run_mcp_chat_mouse.sh
 ./run_mcp_tools.sh doctor
-./run_mcp_tools.sh list-tools
-./run_mcp_tools.sh call --tool photarium_get --args '{"imageId":"YOUR_IMAGE_ID"}'
 ```
 
-Run multi-step jobs from JSON:
-
-```bash
-./run_mcp_tools.sh run-steps --steps-file steps.json
-```
-
-`steps.json` format:
-
-```json
-[
-  {"tool": "photarium_get", "args": {"imageId": "YOUR_IMAGE_ID"}},
-  {"tool": "comfy_queue_get", "args": {}}
-]
-```
-
-`doctor` checks:
-
-- ComfyUI HTTP endpoint reachability
-- Photarium HTTP endpoint reachability
-- MCP server startup and tool listing
-- Basic smoke tool calls (`comfy_queue_get`, `photarium_list`)
-
-### Digest->Signal Extraction Manager
-
-For deterministic Digester signal extraction operations (status, latest runs,
-unprocessed/backfill runs, and images backfill), use:
-
-```bash
-/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py status
-/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-latest --days 2
-/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-unprocessed
-/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-backfill --days 365
-/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py extract-digest --digest digests/2026/03/03082026_105127_digest-this.json
-/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py images-backfill --days 30
-```
-
-Optional near-real-time mode after ingestion:
-
-```bash
-/Users/julian/Code/nfl-comfymcp/.venv/bin/python scripts/manage_signal_extraction.py watch --days 1 --poll-seconds 120
-```
-
-`status --json` now also includes `orphan_signals` so you can audit loose
-signal files that no longer map to a digest. Use `extract-digest` as the
-ingestion hook target to enforce per-digest extraction and verification.
-
-Minimal config example:
-
-```json
-{
-  "llm": {
-    "base_url": "https://api.openai.com/v1",
-    "api_key_env": "OPENAI_API_KEY",
-    "model": "gpt-4o-mini",
-    "temperature": 0.2,
-    "timeout_s": 180
-  },
-  "system_prompt": "You are a terminal chat orchestrator. Decide when to call MCP tools, then summarize results for the user.",
-  "servers": [
-    {
-      "name": "comfy",
-      "command": "python",
-      "args": ["-m", "comfy_mcp.mcp_server.cli"],
-      "tool_prefixes": ["comfy_", "workflows_"]
-    }
-  ]
-}
-```
-
-If you see `LLM request timed out`, increase `llm.timeout_s` (for example `180` or `300`).
+The default `nfl` profile preserves the current Digester, ComfyMCP, Photarium, Backoffice, Editorial, and Workspace routing behavior. Use the `generic` profile for neutral MCP routing.
 
 ### Run A Workflow From An Existing Image
 
@@ -305,12 +202,12 @@ Use `workflows_run_from_source` when you want to start from an image itself inst
 Docs:
 
 - [Workflow Run From Source / Lineage Cache](docs/workflows_run_from_source.README.md)
-- [TUI README](docs/TUI_README.md)
+- [MCP TUI extraction note](docs/TUI_README.md)
 
 Deterministic tool-runner example:
 
 ```bash
-./run_mcp_tools.sh call \
+/Users/julian/Code/nfl-mcp-tui/run_mcp_tools.sh call \
   --tool workflows_run_from_source \
   --args '{
     "source":"75e92a7e-2838-45a7-6f2c-32a5fde6c300",
