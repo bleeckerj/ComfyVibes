@@ -22,7 +22,7 @@ From `nfl-comfymcp/`:
 Default bind settings:
 
 - Host: `127.0.0.1`
-- Port: `8001`
+- Port: `8181`
 
 Override via environment variables:
 

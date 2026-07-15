@@ -39,7 +39,7 @@ This wrapper forwards environment variables to the underlying scripts.
 
 Comfy MCP:
 - `COMFY_MCP_HTTP_BIND_HOST` (default `127.0.0.1`)
-- `COMFY_MCP_HTTP_BIND_PORT` (default `8001`)
+- `COMFY_MCP_HTTP_BIND_PORT` (default `8181`)
 
 Photarium MCP:
 - `PHOTARIUM_HTTP_HOST` (default `127.0.0.1`)

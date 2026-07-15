@@ -75,7 +75,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="HTTP client for MCP proxy servers")
     parser.add_argument(
         "--comfy-url",
-        default="http://127.0.0.1:8001",
+        default="http://127.0.0.1:8181",
         help="Comfy MCP HTTP base URL",
     )
     parser.add_argument(

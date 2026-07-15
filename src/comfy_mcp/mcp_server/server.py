@@ -8,19 +8,22 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
 from comfy_mcp.comfy_client.client import ComfyClient
+from comfy_mcp.comfy_manager.client import ComfyManagerClient
 from comfy_mcp.config.models import AppConfig
 from comfy_mcp.mcp_server.comfy_org_auth import build_comfy_org_extra_data
 from comfy_mcp.mcp_server.policy import Policy
 from comfy_mcp.mcp_server.tool_registry import build_handler_registry
 from comfy_mcp.mcp_server.tool_specs import build_tool_specs
 from comfy_mcp.mcp_server.tools_comfy import ComfyTools
+from comfy_mcp.mcp_server.tools_manager import ManagerTools
 from comfy_mcp.mcp_server.tools_workflows import WorkflowTools
 from comfy_mcp.workflow_store.store import WorkflowStore
 
 
-def build_tools(config: AppConfig) -> tuple[ComfyTools, WorkflowTools]:
+def build_tools(config: AppConfig) -> tuple[ComfyTools, WorkflowTools, ManagerTools]:
     """Build tool handlers for MCP server wiring."""
     client = ComfyClient(str(config.comfy_base_url))
+    manager_client = ComfyManagerClient(str(config.comfy_base_url))
     primary_root = config.resolved_workflow_root()
     run_root = config.resolved_run_workflow_root()
     extra_roots: list[Path] = []
@@ -49,14 +52,14 @@ def build_tools(config: AppConfig) -> tuple[ComfyTools, WorkflowTools]:
         api_key=config.comfy_org_api_key,
         api_key_file=config.comfy_org_api_key_file,
     )
-    return ComfyTools(client), WorkflowTools(
+    return ComfyTools(client, policy, manager_client=manager_client), WorkflowTools(
         store,
         client,
         policy,
         comfy_output_dir=config.comfy_output_dir,
         run_store=WorkflowStore(run_root),
         comfy_org_extra_data=comfy_org_extra_data,
-    )
+    ), ManagerTools(manager_client, policy)
 
 def _tool_to_payload(tool: Any) -> Dict[str, Any]:
     if isinstance(tool, dict):
@@ -214,7 +217,7 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
     except ImportError as exc:
         raise RuntimeError("MCP SDK not installed. Add it to dependencies.") from exc
 
-    comfy_tools, workflow_tools = build_tools(config)
+    comfy_tools, workflow_tools, manager_tools = build_tools(config)
 
     tool_defs = build_tool_specs(types)
 
@@ -227,6 +230,7 @@ def build_tool_registry(config: AppConfig) -> tuple[list[Any], Dict[str, Callabl
     handlers = build_handler_registry(
         comfy_tools,
         workflow_tools,
+        manager_tools,
         list_tools_handler=lambda name=None, prefix=None, limit=None, include_schema=True: _list_tool_payloads(
             tool_defs,
             name=name,

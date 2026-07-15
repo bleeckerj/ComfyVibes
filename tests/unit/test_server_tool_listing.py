@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from comfy_mcp.mcp_server.server import _filter_supported_kwargs, _list_tool_payloads
+import pytest
+
+from comfy_mcp.mcp_server.server import _list_tool_payloads, validate_tool_arguments
 
 
 def test_list_tool_payloads_supports_name_filter() -> None:
@@ -32,37 +34,31 @@ def test_list_tool_payloads_can_exclude_schema() -> None:
     }
 
 
-def test_filter_supported_kwargs_drops_unknown_values() -> None:
-    def handler(path: str, workflow_id: str) -> dict:
-        return {"path": path, "workflow_id": workflow_id}
+def test_validate_tool_arguments_rejects_unknown_values() -> None:
+    tool = {
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "workflow_id": {"type": "string"}},
+            "required": ["path", "workflow_id"],
+        }
+    }
 
-    filtered = _filter_supported_kwargs(
-        handler,
-        {"path": "/tmp/a.png", "workflow_id": "demo", "overrides": {"x": 1}},
+    with pytest.raises(ValueError, match=r"Unknown parameter\(s\): overrides"):
+        validate_tool_arguments(tool, {"path": "/tmp/a.png", "workflow_id": "demo", "overrides": {"x": 1}})
+
+
+def test_validate_tool_arguments_unwraps_payload_and_camelcase() -> None:
+    tool = {
+        "inputSchema": {
+            "type": "object",
+            "properties": {"image_id": {"type": "string"}, "workflow_id": {"type": "string"}},
+            "required": ["image_id", "workflow_id"],
+        }
+    }
+
+    normalized = validate_tool_arguments(
+        tool,
+        {"input": {"imageId": "img-123", "workflowId": "wf-123"}},
     )
 
-    assert filtered == {"path": "/tmp/a.png", "workflow_id": "demo"}
-
-
-def test_filter_supported_kwargs_unwraps_input_payload() -> None:
-    def handler(image_path: str, aspect_ratio: str) -> dict:
-        return {"image_path": image_path, "aspect_ratio": aspect_ratio}
-
-    filtered = _filter_supported_kwargs(
-        handler,
-        {"input": {"image_path": "/tmp/a.png", "aspect_ratio": "3:2"}},
-    )
-
-    assert filtered == {"image_path": "/tmp/a.png", "aspect_ratio": "3:2"}
-
-
-def test_filter_supported_kwargs_accepts_camelcase_aliases() -> None:
-    def handler(image_id: str, workflow_id: str) -> dict:
-        return {"image_id": image_id, "workflow_id": workflow_id}
-
-    filtered = _filter_supported_kwargs(
-        handler,
-        {"imageId": "img-123", "workflowId": "wf-123"},
-    )
-
-    assert filtered == {"image_id": "img-123", "workflow_id": "wf-123"}
+    assert normalized == {"image_id": "img-123", "workflow_id": "wf-123"}

@@ -210,3 +210,63 @@ def test_call_tool_rejects_missing_required_fields(monkeypatch) -> None:
     payload = response.json()
     assert payload["ok"] is False
     assert "Missing required parameter(s): workflow_id" in payload["error"]
+
+
+def test_call_tool_injects_bearer_token_for_mutation(monkeypatch) -> None:
+    captured: dict[str, str | bool] = {}
+
+    def strict_handler(confirm: bool = False, token: str | None = None) -> dict:
+        captured["confirm"] = confirm
+        captured["token"] = token or ""
+        return {"status": "executed"}
+
+    monkeypatch.setattr(
+        "comfy_mcp.mcp_server.http_server.build_tool_registry",
+        lambda config: (
+            [{
+                "name": "comfy_queue_interrupt",
+                "description": "",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"confirm": {"type": "boolean"}, "token": {"type": "string"}},
+                    "required": [],
+                },
+            }],
+            {"comfy_queue_interrupt": strict_handler},
+        ),
+    )
+    app = create_http_app(AppConfig())
+    client = TestClient(app)
+
+    response = client.post(
+        "/tools/comfy_queue_interrupt",
+        headers={"Authorization": "Bearer header-secret"},
+        json={"confirm": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "result": {"status": "executed"}}
+    assert captured == {"confirm": True, "token": "header-secret"}
+
+
+def test_tools_endpoint_exposes_remote_integration_schemas() -> None:
+    app = create_http_app(AppConfig())
+    client = TestClient(app)
+
+    response = client.get("/tools")
+
+    assert response.status_code == 200
+    payload = response.json()
+    names = {tool["name"] for tool in payload["tools"]}
+    assert {"comfy_capabilities_get", "comfy_nodes_search", "comfy_upload_mask", "comfy_manager_operation"} <= names
+
+    schema = client.get("/tools/comfy_manager_operation").json()["tool"]["inputSchema"]
+    assert schema["properties"]["operation"]["enum"] == [
+        "install_node_pack",
+        "update_node_pack",
+        "uninstall_node_pack",
+        "disable_node_pack",
+        "install_model",
+        "update_comfyui",
+        "update_all",
+    ]

@@ -86,7 +86,7 @@ def main() -> None:
     parser.add_argument("--prompt", required=True, help="Positive prompt")
     parser.add_argument("--workflow-id", default="image_edit", help="Workflow id to run")
     parser.add_argument("--negative", default="", help="Negative prompt")
-    parser.add_argument("--comfy-url", default="http://127.0.0.1:8001", help="Comfy MCP HTTP base URL")
+    parser.add_argument("--comfy-url", default="http://127.0.0.1:8181", help="Comfy MCP HTTP base URL")
     parser.add_argument("--photarium-url", default="http://127.0.0.1:8787", help="Photarium MCP HTTP base URL")
     parser.add_argument(
         "--comfy-base-url",

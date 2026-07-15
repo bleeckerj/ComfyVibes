@@ -6,7 +6,7 @@ Usage:
   python scripts/photarium_aspect_variant.py \
     --image-id <photarium_id> \
     --aspect-ratio 1:1 \
-    --comfy-mcp-url http://127.0.0.1:8001 \
+    --comfy-mcp-url http://127.0.0.1:8181 \
     --photarium-mcp-url http://127.0.0.1:8787 \
     --comfyui-base-url http://127.0.0.1:8188
 
@@ -146,7 +146,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Create an aspect-ratio variant in Photarium via ComfyMCP")
     parser.add_argument("--image-id", required=True, help="Photarium image id")
     parser.add_argument("--aspect-ratio", required=True, help="Target aspect ratio, e.g. 1:1")
-    parser.add_argument("--comfy-mcp-url", default="http://127.0.0.1:8001")
+    parser.add_argument("--comfy-mcp-url", default="http://127.0.0.1:8181")
     parser.add_argument("--photarium-mcp-url", default="http://127.0.0.1:8787")
     parser.add_argument(
         "--comfyui-base-url",

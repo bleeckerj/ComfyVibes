@@ -21,3 +21,31 @@ def test_policy_enforces_payload_size() -> None:
 
     with pytest.raises(ValueError):
         policy.enforce_payload_size(10)
+
+
+def test_policy_requires_confirmation_for_remote_mutations() -> None:
+    policy = Policy(api_token=None, readonly_mode=False, max_workflow_bytes=10)
+
+    with pytest.raises(PermissionError, match="Confirmation required"):
+        policy.enforce_remote_mutation(None, confirmed=False, operation="comfy_queue_delete")
+
+    policy.enforce_remote_mutation(None, confirmed=True, operation="comfy_queue_delete")
+
+
+def test_policy_requires_configured_token_before_confirmation() -> None:
+    policy = Policy(api_token="secret", readonly_mode=False, max_workflow_bytes=10)
+
+    with pytest.raises(PermissionError, match="Invalid API token"):
+        policy.enforce_remote_mutation(None, confirmed=True, operation="comfy_memory_free")
+
+    with pytest.raises(PermissionError, match="Invalid API token"):
+        policy.enforce_remote_mutation("wrong", confirmed=True, operation="comfy_memory_free")
+
+    policy.enforce_remote_mutation("secret", confirmed=True, operation="comfy_memory_free")
+
+
+def test_policy_readonly_precedes_confirmation_and_token() -> None:
+    policy = Policy(api_token="secret", readonly_mode=True, max_workflow_bytes=10)
+
+    with pytest.raises(PermissionError, match="Readonly mode"):
+        policy.enforce_remote_mutation(None, confirmed=False, operation="comfy_upload_asset")

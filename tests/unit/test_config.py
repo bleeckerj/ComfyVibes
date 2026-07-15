@@ -41,6 +41,7 @@ def test_comfy_org_auth_extra_data_prefers_env_secret_over_file(tmp_path) -> Non
             "workflow_library_root": "~/tmp/comfy-mcp",
             "comfy_org_auth_token": "env-token",
             "comfy_org_auth_token_file": token_file,
+            "comfy_org_api_key": None,
             "comfy_org_api_key_file": api_key_file,
         }
     )

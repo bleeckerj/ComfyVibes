@@ -118,11 +118,31 @@ python -m comfy_mcp.mcp_server.http_server
 Defaults:
 
 - `COMFY_MCP_HTTP_BIND_HOST=127.0.0.1`
-- `COMFY_MCP_HTTP_BIND_PORT=8001`
+- `COMFY_MCP_HTTP_BIND_PORT=8181`
 - `COMFY_MCP_WORKFLOW_LIBRARY_ROOT=./workflows` (via repo launcher scripts)
 - `COMFY_MCP_INCLUDE_EXTRA_WORKFLOW_ROOTS=0` (set to `1` to merge additional roots like `~/.comfy-mcp/workflows`)
 
 You can persist settings in `.env` (see [.env.example](.env.example)).
+
+### Remote ComfyUI and Manager integrations
+
+ComfyMCP keeps the MCP server and workflow library on the laptop while using the configured ComfyUI host as the remote execution target:
+
+```dotenv
+COMFY_MCP_COMFY_BASE_URL=http://gpu-host-or-tunnel:8188
+COMFY_MCP_HTTP_BIND_HOST=127.0.0.1
+COMFY_MCP_HTTP_BIND_PORT=8181
+# COMFY_MCP_API_TOKEN=keep-this-server-side
+# COMFY_MCP_READONLY_MODE=true
+```
+
+Use a private network, VPN, or tunnel between the laptop and GPU host. Keep both the ComfyUI target and the MCP HTTP proxy away from untrusted networks. Manager discovery uses the same `COMFY_MCP_COMFY_BASE_URL`; it returns an unavailable result when Manager v4 is absent.
+
+Capability, job, template, subgraph, asset, tag, and node-catalog tools are read-only. Queue controls, memory release, history deletion, settings writes, uploads, and Manager operations require readonly mode to be disabled, `confirm=true`, and the configured API token when one is set. HTTP callers may provide that token with `Authorization: Bearer ...` or `X-MCP-Token`; tokens are not returned by tools.
+
+Optional remote endpoints are reported as unsupported or unreachable within `comfy_capabilities_get`. The node catalog and capability audit cache for 60 seconds; Manager discovery caches for 300 seconds. Use the refresh arguments after remote ComfyUI or Manager changes.
+
+For controlled live verification, use `COMFY_MCP_LIVE_TESTS=1` for read-only smoke tests. Keep workflow execution and remote mutations behind the separate `COMFY_MCP_LIVE_MUTATION_TESTS=1` gate.
 
 #### Comfy Org auth for API nodes
 

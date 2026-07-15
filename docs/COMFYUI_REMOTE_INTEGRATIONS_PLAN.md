@@ -1,8 +1,15 @@
 # ComfyUI Remote Integrations Plan
 
-Status: planned
+Status: implemented (2026-07-15)
 Target repository: `/Users/julian/Code/nfl-comfymcp`
 Source of feature ideas: `/Users/julian/Code/ComfyUI_FL-MCP`
+
+Implementation notes:
+
+- The laptop-side ComfyMCP architecture remains the MCP and workflow state boundary; `COMFY_MCP_COMFY_BASE_URL` is the single remote ComfyUI and Manager target.
+- Client routes, partial capability discovery, policy-gated mutations, Manager v4 discovery/mutations, filtered node search, HTTP/stdio registry exposure, and focused tests are implemented.
+- Read-only remote integration tests require `COMFY_MCP_LIVE_TESTS=1`; workflow execution and mutation smoke tests remain separately gated by `COMFY_MCP_LIVE_MUTATION_TESTS=1`.
+- Local verification passes with the optional live tests skipped. Remote host reachability and installed Manager version remain environment-dependent checks.
 
 ## Objective
 
@@ -59,7 +66,7 @@ Deferred host operations require a separate authenticated GPU-host service or an
 3. Keep `COMFY_MCP_COMFY_BASE_URL` as the single remote target configuration.
 4. Leave `COMFY_MCP_COMFY_OUTPUT_DIR` unset unless the GPU output directory is intentionally mounted locally.
 5. Resolve or explicitly update the existing stale test import in `tests/unit/test_server_tool_listing.py`, which currently imports a removed `_filter_supported_kwargs` symbol.
-6. Reconcile the HTTP port documentation drift: the launcher currently uses port `8181`, while some examples use `8001`.
+6. Keep HTTP proxy documentation and examples aligned with the launcher default of port `8181`.
 
 Acceptance criteria:
 

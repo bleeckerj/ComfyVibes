@@ -11,9 +11,15 @@ def _get_base_url() -> str | None:
     return os.getenv("COMFY_MCP_TEST_URL") or os.getenv("COMFY_MCP_COMFY_BASE_URL")
 
 
+def _require_live_tests() -> None:
+    if os.getenv("COMFY_MCP_LIVE_TESTS") != "1":
+        pytest.skip("Set COMFY_MCP_LIVE_TESTS=1 for read-only remote ComfyUI smoke tests.")
+
+
 @pytest.mark.asyncio
 async def test_live_object_info() -> None:
     """Live test: `/object_info` should return a dict with node info."""
+    _require_live_tests()
     base_url = _get_base_url()
     if not base_url:
         pytest.skip("Set COMFY_MCP_TEST_URL to run live ComfyUI tests.")
@@ -28,6 +34,7 @@ async def test_live_object_info() -> None:
 @pytest.mark.asyncio
 async def test_live_queue() -> None:
     """Live test: `/queue` should return a dict payload."""
+    _require_live_tests()
     base_url = _get_base_url()
     if not base_url:
         pytest.skip("Set COMFY_MCP_TEST_URL to run live ComfyUI tests.")
@@ -41,6 +48,7 @@ async def test_live_queue() -> None:
 @pytest.mark.asyncio
 async def test_live_history() -> None:
     """Live test: `/history` should return a dict payload."""
+    _require_live_tests()
     base_url = _get_base_url()
     if not base_url:
         pytest.skip("Set COMFY_MCP_TEST_URL to run live ComfyUI tests.")

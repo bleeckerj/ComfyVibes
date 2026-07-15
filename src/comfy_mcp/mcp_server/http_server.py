@@ -27,7 +27,9 @@ def _extract_token(request: Request) -> Optional[str]:
 
 
 def _inject_token(handler: Any, args: Dict[str, Any], request: Request) -> Dict[str, Any]:
-    if "token" not in args and "token" not in _tool_input_schema(handler):
+    schema = _tool_input_schema(handler)
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    if "token" not in args and "token" not in properties:
         return args
     if "token" in args:
         return args

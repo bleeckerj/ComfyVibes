@@ -372,7 +372,7 @@ def main() -> None:
     parser.add_argument("--reference-limit", type=int, default=12, help="Max references to retrieve")
     parser.add_argument("--seed-base", type=int, default=None, help="Optional base seed for deterministic sweeps")
     parser.add_argument("--upload", action="store_true", help="Upload generated outputs back to Photarium when possible")
-    parser.add_argument("--comfy-url", default="http://127.0.0.1:8001", help="Comfy MCP HTTP base URL")
+    parser.add_argument("--comfy-url", default="http://127.0.0.1:8181", help="Comfy MCP HTTP base URL")
     parser.add_argument("--photarium-url", default="http://127.0.0.1:8787", help="Photarium MCP HTTP base URL")
     parser.add_argument("--manifest-path", default=None, help="Path to write JSON manifest (default: /tmp timestamp file)")
     args = parser.parse_args()

@@ -44,7 +44,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Save extracted workflow into workflow store")
     parser.add_argument("--image", required=True, help="Path to workflow artifact image")
     parser.add_argument("--workflow-id", required=True, help="Workflow id for storage")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8001", help="Comfy MCP HTTP base URL")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8181", help="Comfy MCP HTTP base URL")
     args = parser.parse_args()
 
     workflow = _extract_workflow(args.base_url, args.image)
