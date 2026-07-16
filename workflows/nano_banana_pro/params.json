@@ -1,0 +1,127 @@
+{
+  "schema_version": "1",
+  "workflow_id": "nano_banana_pro",
+  "workflow_hash": "13d262a9dc62ca604c2a68f82504012c8b6f4ebb8c3626c32c91a0225c193127",
+  "params": [
+    {
+      "name": "seed",
+      "type": "int",
+      "default": 496218009446904,
+      "required": false,
+      "description": "Nano Banana Pro (Google Gemini Image).seed",
+      "target": {
+        "mode": "direct",
+        "node_id": "35",
+        "input": "seed"
+      }
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "default": "Remove the room window on the left wall.",
+      "required": false,
+      "description": "Nano Banana Pro (Google Gemini Image).prompt",
+      "target": {
+        "mode": "direct",
+        "node_id": "35",
+        "input": "prompt"
+      }
+    },
+    {
+      "name": "aspect_ratio",
+      "type": "string",
+      "default": "16:9",
+      "required": false,
+      "description": "Nano Banana Pro (Google Gemini Image).aspect_ratio",
+      "target": {
+        "mode": "direct",
+        "node_id": "35",
+        "input": "aspect_ratio"
+      }
+    },
+    {
+      "name": "filename_prefix",
+      "type": "string",
+      "default": "ComfyUI",
+      "required": false,
+      "description": "Save Image.filename_prefix",
+      "target": {
+        "mode": "direct",
+        "node_id": "30",
+        "input": "filename_prefix"
+      }
+    },
+    {
+      "name": "image",
+      "type": "string",
+      "default": "api_nano_banana_pro_input_image_1.png",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "11",
+        "input": "image"
+      }
+    },
+    {
+      "name": "image_2",
+      "type": "string",
+      "default": "api_nano_banana_pro_input_image_2.png",
+      "required": false,
+      "description": "Load Image.image",
+      "target": {
+        "mode": "direct",
+        "node_id": "12",
+        "input": "image"
+      }
+    },
+    {
+      "name": "model",
+      "type": "string",
+      "default": "gemini-3-pro-image-preview",
+      "required": false,
+      "description": "Nano Banana Pro (Google Gemini Image).model",
+      "target": {
+        "mode": "direct",
+        "node_id": "35",
+        "input": "model"
+      }
+    },
+    {
+      "name": "resolution",
+      "type": "string",
+      "default": "1K",
+      "required": false,
+      "description": "Nano Banana Pro (Google Gemini Image).resolution",
+      "target": {
+        "mode": "direct",
+        "node_id": "35",
+        "input": "resolution"
+      }
+    },
+    {
+      "name": "response_modalities",
+      "type": "string",
+      "default": "IMAGE",
+      "required": false,
+      "description": "Nano Banana Pro (Google Gemini Image).response_modalities",
+      "target": {
+        "mode": "direct",
+        "node_id": "35",
+        "input": "response_modalities"
+      }
+    },
+    {
+      "name": "system_prompt",
+      "type": "string",
+      "default": "You are an expert image-generation engine. You must ALWAYS produce an image.\nInterpret all user input—regardless of format, intent, or abstraction—as literal visual directives for image composition.\nIf a prompt is conversational or lacks specific visual details, you must creatively invent a concrete visual scenario that depicts the concept.\nPrioritize generating the visual representation above any text, formatting, or conversational requests.",
+      "required": false,
+      "description": "Nano Banana Pro (Google Gemini Image).system_prompt",
+      "target": {
+        "mode": "direct",
+        "node_id": "35",
+        "input": "system_prompt"
+      }
+    }
+  ]
+}

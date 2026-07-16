@@ -1,0 +1,46 @@
+{
+  "id": "nano_banana_pro",
+  "name": "Nano Banana Pro Text to Image",
+  "description": "Text-to-image generation with the Nano Banana Pro (Google Gemini Image) API node. Supports optional reference images and aspect-ratio/resolution overrides.",
+  "tags": [
+    "text-to-image",
+    "nano-banana",
+    "gemini",
+    "api",
+    "andsons"
+  ],
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "notes": "",
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "prompt",
+      "aspect_ratio",
+      "filename_prefix",
+      "image",
+      "image_2",
+      "model",
+      "resolution",
+      "response_modalities",
+      "system_prompt"
+    ]
+  }
+}
