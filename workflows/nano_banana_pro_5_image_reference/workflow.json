@@ -1,0 +1,107 @@
+{
+  "11": {
+    "inputs": {
+      "image": "andsons-individual-bonbon-reference-contact-sheet.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": "logo-box-brooks-brothers-split-top-bottom.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "30": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "35",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "35": {
+    "inputs": {
+      "prompt": "Use reference image 1 as the authoritative six-piece box-bottom subject and reference image 2 only as construction guidance for a top-bottom split-slide cover. Create a photorealistic open rigid chocolate package on a warm cream tabletop in a 2:3 portrait composition. Keep the stationary 2-by-3 tray, exactly six chocolates with three round or domed pieces and three square or rectangular pieces, and two equal full-cover sleeve halves separated above and below the tray with slight end engagement. Preserve the package footprint, tray layout, sleeve proportions, horizontal split, and sliding mechanics. Do not copy any logo, emblem, lettering, or unrelated artwork from the construction reference. Do not add text, watermark, hinge, lift-off lid, or extra objects.",
+      "model": "gemini-3-pro-image-preview",
+      "seed": 953160620648539,
+      "aspect_ratio": "4:5",
+      "resolution": "1K",
+      "response_modalities": "IMAGE",
+      "system_prompt": "You are an expert image-generation engine. You must ALWAYS produce an image.\nInterpret all user input—regardless of format, intent, or abstraction—as literal visual directives for image composition.\nIf a prompt is conversational or lacks specific visual details, you must creatively invent a concrete visual scenario that depicts the concept.\nPrioritize generating the visual representation above any text, formatting, or conversational requests.",
+      "images": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "GeminiImage2Node",
+    "_meta": {
+      "title": "Nano Banana Pro (Google Gemini Image)"
+    }
+  },
+  "36": {
+    "inputs": {
+      "images.image0": [
+        "12",
+        0
+      ],
+      "images.image1": [
+        "11",
+        0
+      ],
+      "images.image2": [
+        "37",
+        0
+      ],
+      "images.image3": [
+        "38",
+        0
+      ],
+      "images.image4": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": {
+      "title": "Batch Images"
+    }
+  },
+  "37": {
+    "inputs": {
+      "image": "AndsonsRigidBox6HiresRoot_07152026202744.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "38": {
+    "inputs": {
+      "image": "bonbon-set-a-reference-sheet.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "39": {
+    "inputs": {
+      "image": "MilkHazelnutPraline_450x.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}

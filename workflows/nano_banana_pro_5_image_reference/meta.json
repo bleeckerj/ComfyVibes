@@ -1,0 +1,52 @@
+{
+  "id": "nano_banana_pro_5_image_reference",
+  "name": "Nano Banana Pro — 5 Image References",
+  "description": "Nano Banana Pro image generation with five batched reference images for constructing a photorealistic rigid chocolate package.",
+  "tags": [
+    "text-to-image",
+    "image-reference",
+    "multi-image",
+    "5-image-reference",
+    "nano-banana",
+    "gemini",
+    "andsons",
+    "packaging"
+  ],
+  "notes": "The supplied PNG matches the workflow graph and prompt but contains a different embedded seed than the supplied JSON. The corpus entry preserves the JSON seed.",
+  "use_cases": [
+    "Generate a fresh image from a text brief."
+  ],
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "prompt",
+      "aspect_ratio",
+      "filename_prefix",
+      "image",
+      "image_2",
+      "image_3",
+      "image_4",
+      "image_5",
+      "model",
+      "resolution",
+      "response_modalities",
+      "system_prompt"
+    ]
+  }
+}
