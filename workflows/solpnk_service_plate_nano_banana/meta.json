@@ -1,0 +1,46 @@
+{
+  "id": "solpnk_service_plate_nano_banana",
+  "name": "SOLPNK Service Plate — Nano Banana Pro",
+  "description": "Two-reference Nano Banana Pro graph for monochrome SOLPNK mech service-manual plates. Uses image and image_2 as style references and prompt/aspect_ratio as runtime overrides.",
+  "tags": [
+    "solpnk",
+    "service-manual",
+    "technical-illustration",
+    "image-reference",
+    "nano-banana"
+  ],
+  "use_cases": [
+    "Generate a SOLPNK service-manual plate from a structured component brief with two style references."
+  ],
+  "notes": "The Batch Images output is explicitly connected to the Gemini image node. Style references are visual grammar only; page furniture remains external or prompt-reserved.",
+  "strengths": [],
+  "tradeoffs": [],
+  "style": [],
+  "mood": [],
+  "io_contract": {
+    "inputs": [
+      "input_image",
+      "prompt",
+      "overrides"
+    ],
+    "outputs": [
+      "output_images[]"
+    ]
+  },
+  "examples": [],
+  "requires": {
+    "inputs": [],
+    "params": [
+      "seed",
+      "prompt",
+      "aspect_ratio",
+      "filename_prefix",
+      "image",
+      "image_2",
+      "model",
+      "resolution",
+      "response_modalities",
+      "system_prompt"
+    ]
+  }
+}
